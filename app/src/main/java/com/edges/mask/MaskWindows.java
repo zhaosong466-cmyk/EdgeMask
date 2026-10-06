@@ -5,7 +5,7 @@ final class MaskWindows {
  MaskWindows(Context c,boolean a){this.c=c;accessibility=a;wm=(WindowManager)c.getSystemService(Context.WINDOW_SERVICE);}
  void clear(){for(View v:views){try{wm.removeViewImmediate(v);}catch(RuntimeException ignored){}}views.clear();}
  void show(){clear();error="";android.util.DisplayMetrics m=new android.util.DisplayMetrics();wm.getDefaultDisplay().getRealMetrics(m);
- int w=m.widthPixels,h=m.heightPixels; int b=Math.round(w*Config.prefs(c).getInt("width",4)/100f);
+ int w=m.widthPixels,h=m.heightPixels; int b=Config.rootApplied()?0:Math.round(w*Config.prefs(c).getInt("width",4)/100f);
  int r=Math.min(Math.round(Config.prefs(c).getInt("radius",32)*m.density),Math.min((w-2*b)/2,h/2));
  try{if(b>0){add(new Part(c,-1),b,h,Gravity.TOP|Gravity.LEFT,0);add(new Part(c,-1),b,h,Gravity.TOP|Gravity.RIGHT,0);}
  if(r>0){add(new Part(c,0),r,r,Gravity.TOP|Gravity.LEFT,b);add(new Part(c,1),r,r,Gravity.TOP|Gravity.RIGHT,b);add(new Part(c,2),r,r,Gravity.BOTTOM|Gravity.LEFT,b);add(new Part(c,3),r,r,Gravity.BOTTOM|Gravity.RIGHT,b);}}
