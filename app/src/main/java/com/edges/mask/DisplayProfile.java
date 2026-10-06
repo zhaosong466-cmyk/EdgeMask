@@ -7,13 +7,18 @@ import java.util.regex.Pattern;
 final class DisplayProfile {
     final int physicalWidth, physicalHeight, width, height, density;
     final boolean overridden;
+    final int scalingMode;
 
     DisplayProfile(int pw, int ph, int w, int h, int dpi, boolean override) {
+        this(pw, ph, w, h, dpi, override, DisplayScaling.UNKNOWN);
+    }
+    DisplayProfile(int pw, int ph, int w, int h, int dpi, boolean override, int scaling) {
         if (pw < 200 || ph < 200 || pw > 10000 || ph > 10000
                 || w < 200 || h < 200 || w > 10000 || h > 10000
-                || dpi < 72 || dpi > 1200) throw new IllegalArgumentException("显示参数不受支持");
+                || dpi < 72 || dpi > 1200 || scaling < -1 || scaling > 1)
+            throw new IllegalArgumentException("显示参数不受支持");
         physicalWidth = pw; physicalHeight = ph; width = w; height = h;
-        density = dpi; overridden = override;
+        density = dpi; overridden = override; scalingMode = scaling;
     }
 
     static int[] size(String output, String kind, boolean required) {
@@ -34,7 +39,7 @@ final class DisplayProfile {
         while (m.find()) dpi = Integer.parseInt(m.group(2));
         int[] effective = override == null ? physical : override;
         return new DisplayProfile(physical[0], physical[1], effective[0], effective[1], dpi,
-                override != null);
+                override != null, DisplayScaling.parse(output));
     }
 
     void validateBaseline() {
@@ -42,6 +47,12 @@ final class DisplayProfile {
         if (Math.abs(ratio - 1) > .01) throw new IllegalArgumentException("原始显示比例已有自定义修改，请先恢复后再使用 Root 模式");
         if (Math.min(width, height) * 160.0 / density < 320)
             throw new IllegalArgumentException("原始显示区域小于 320 dp，拒绝进一步收窄");
+    }
+
+    void validateNoScaleBaseline() {
+        validateBaseline(); DisplayScaling.argument(scalingMode);
+        if (width != physicalWidth || height != physicalHeight)
+            throw new IllegalArgumentException("当前已有缩放分辨率，防拉伸 Root 模式暂不支持；请使用普通遮罩");
     }
 
     int[] target(int percent, int rotation) {
@@ -54,6 +65,15 @@ final class DisplayProfile {
                 || Math.min(result[0], result[1]) * 160.0 / density < 320)
             throw new IllegalArgumentException("超出安全范围：可见短边必须至少 320 dp，请减小黑条宽度");
         return result;
+    }
+
+    int maximumPercent(int rotation) {
+        if (rotation < 0 || rotation > 3) throw new IllegalArgumentException("旋转参数无效");
+        for (int percent = 15; percent > 0; percent--) {
+            try { target(percent, rotation); return percent; }
+            catch (IllegalArgumentException ignored) { }
+        }
+        return 0;
     }
 
     String restoreArgument() { return overridden ? width + "x" + height : "reset"; }

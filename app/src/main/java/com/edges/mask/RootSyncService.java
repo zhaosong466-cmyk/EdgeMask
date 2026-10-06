@@ -12,7 +12,9 @@ import java.util.concurrent.Executors;
 /** A session is deliberately not restarted by Android. Root settings are never reapplied at boot. */
 public class RootSyncService extends Service implements DisplayManager.DisplayListener {
     static volatile RootSyncService instance;
-    volatile boolean active, armed, verified, pending, stopping;
+    volatile boolean active, armed, verified, pending, stopping, projectionVerified;
+    private volatile boolean checkingProjection;
+    private long lastProjectionCheck;
     volatile long previewDeadline;
     private DisplayProfile original;
     private int originalRotation, lastPercent = -1;
@@ -38,13 +40,29 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
                         revert("遮罩权限已失效"); return;
                     }
                     String state = RootController.read(RootController.file(RootSyncService.this, "state"));
-                    if (!state.isEmpty()) {
-                        revert("独立回退进程已触发恢复"); return;
-                    }
                     long now = SystemClock.elapsedRealtime() / 1000;
+                    if (!state.isEmpty()) {
+                        if (pending && now >= previewDeadline) revert("预览超时，已请求恢复原始显示");
+                        else fallback("独立回退进程已触发恢复");
+                        return;
+                    }
                     if (pending && now >= previewDeadline) { revert("预览超时，已请求恢复原始分辨率"); return; }
                     if (!pending) RootController.lease(RootSyncService.this, now + 20);
                     if (rotation() != originalRotation) { revert("屏幕旋转，已请求恢复原始分辨率"); return; }
+                    if (!pending && projectionVerified && !checkingProjection && now - lastProjectionCheck >= 5) {
+                        checkingProjection = true; lastProjectionCheck = now;
+                        final int request = generation;
+                        worker.execute(() -> {
+                            try {
+                                DisplayProfile current = RootController.query();
+                                if (current.scalingMode != DisplayScaling.OFF)
+                                    throw new Exception("系统重新开启了自动缩放");
+                                RootController.verifyProjection(original, original.target(lastPercent, originalRotation), originalRotation);
+                            } catch (Exception e) {
+                                ui.post(() -> { if (request == generation && wanted()) fallback("屏幕映射改变或再次拉伸"); });
+                            } finally { checkingProjection = false; }
+                        });
+                    }
                 }
             } catch (Exception e) { revert("回退监控异常，已请求恢复"); return; }
             ui.postDelayed(this, 1000);
@@ -81,11 +99,16 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             int percent = Config.prefs(this).getInt("width", 4);
             if (original == null) {
                 if (!RootController.available || RootController.recovering) throw new Exception("请先检测并授予 Root 权限");
-                original = RootController.query(); original.validateBaseline(); originalRotation = rotation();
+                original = RootController.query(); original.validateNoScaleBaseline(); originalRotation = rotation();
+                // Unsupported viewport formats must fail before changing any display setting.
+                RootController.verifyProjection(original, new int[]{original.width, original.height}, originalRotation);
             }
             if (rotation() != originalRotation) throw new Exception("旋转后请重新开启 Root 会话");
             int[] target = original.target(percent, originalRotation);
-            if (percent == lastPercent) { verifiedGeneration = request; return; }
+            if (percent == lastPercent) {
+                RootController.verifyProjection(original, target, originalRotation);
+                verifiedGeneration = request; return;
+            }
             if (percent == 0) { ui.post(() -> revert("宽度为零，恢复原始显示")); return; }
             if (!armed) {
                 previewDeadline = SystemClock.elapsedRealtime() / 1000 + 15;
@@ -100,20 +123,31 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             if (SystemClock.elapsedRealtime() / 1000 >= previewDeadline) throw new Exception("预览已超时");
             if (!RootController.read(RootController.file(this, "state")).isEmpty()) throw new Exception("回退已开始，拒绝修改");
             // Configuration callbacks may run while wm is updating the logical display.
-            active = true; verified = false;
+            active = true; verified = false; projectionVerified = false;
+            ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
             // The watchdog is the only size writer during a session. A delayed su request
             // can never apply a new size after the watchdog has already rolled back.
             RootController.requestTarget(this, target[0], target[1], previewDeadline);
             DisplayProfile result = RootController.query();
             if (result.width != target[0] || result.height != target[1] || result.density != original.density
-                    || result.physicalWidth != original.physicalWidth || result.physicalHeight != original.physicalHeight)
+                    || result.physicalWidth != original.physicalWidth || result.physicalHeight != original.physicalHeight
+                    || result.scalingMode != DisplayScaling.OFF)
                 throw new Exception("系统未按预期修改显示，触发恢复");
+            // WM accepting a resolution is not proof that the ROM stopped stretching it.
+            Exception projectionError = null;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (!wanted() || SystemClock.elapsedRealtime() / 1000 >= previewDeadline) return;
+                try { RootController.verifyProjection(original, target, originalRotation); projectionError = null; break; }
+                catch (Exception e) { projectionError = e; if (attempt < 2) Thread.sleep(150); }
+            }
+            if (projectionError != null) throw projectionError;
+            if (!wanted() || request != generation) return;
             lastPercent = percent;
-            verifiedGeneration = request; verified = true;
-            RootController.message = "当前 " + target[0] + "×" + target[1] + "，DPI 保持 " + original.density;
+            projectionVerified = true; verifiedGeneration = request; verified = true;
+            RootController.message = "已校验居中显示 " + target[0] + "×" + target[1] + "；缩放关闭，DPI " + original.density;
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
         } catch (Exception e) {
-            ui.post(() -> revert(e.getMessage() == null ? "Root 显示修改失败" : e.getMessage()));
+            ui.post(() -> fallback(e.getMessage() == null ? "Root 显示修改失败" : e.getMessage()));
         }
     }
     void confirm() {
@@ -129,16 +163,26 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
     }
     boolean canConfirm() { return active && verified && pending && !stopping && verifiedGeneration == generation; }
     void revert(String reason) {
+        finish(reason, false);
+    }
+    void fallback(String reason) {
+        if (!wanted()) { revert(reason); return; }
+        finish(reason, true);
+    }
+    private void finish(String reason, boolean keepMask) {
         if (stopping) return;
-        stopping = true; active = false; verified = false; pending = false; generation++;
+        stopping = true; active = false; verified = false; pending = false; projectionVerified = false; generation++;
         ui.removeCallbacksAndMessages(null);
-        Config.prefs(this).edit().putBoolean("enabled", false).putBoolean("rootWanted", false).apply();
+        boolean preserve = keepMask && ((Config.access(this) && MaskAccessibility.instance != null)
+            || (!Config.access(this) && android.provider.Settings.canDrawOverlays(this)));
+        Config.prefs(this).edit().putBoolean("enabled", preserve).putBoolean("rootWanted", false).apply();
         Config.refresh(this);
         RootController.message = reason + "；正在恢复…";
         worker.execute(() -> {
-            try { RootController.restore(this); RootController.message = reason + "；原始显示已恢复"; }
+            try { RootController.restore(this); RootController.message = reason
+                + (preserve ? "；已恢复尺寸和缩放，继续普通黑边" : "；原始显示已恢复"); }
             catch (Exception e) { RootController.message = "恢复未确认：" + e.getMessage(); }
-            ui.post(() -> stopSelf());
+            ui.post(() -> { Config.refresh(this); stopSelf(); });
         });
     }
     @Override public void onDisplayChanged(int id) {

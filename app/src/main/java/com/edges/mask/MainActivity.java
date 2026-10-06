@@ -13,7 +13,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    LinearLayout root;
+    LinearLayout root, screen, header, footer;
     TextView status, rootStatus;
     Preview preview;
     SeekBar width, radius;
@@ -27,26 +27,63 @@ public class MainActivity extends Activity {
     };
     int dp(float v) { return Math.round(v * getResources().getDisplayMetrics().density); }
     TextView text(String s, int size) {
+        return text(root, s, size);
+    }
+    TextView text(LinearLayout host, String s, int size) {
         TextView t = new TextView(this); t.setText(s); t.setTextSize(size);
-        t.setTextColor(Color.rgb(24, 32, 48)); t.setPadding(0, dp(8), 0, dp(8)); root.addView(t); return t;
+        t.setTextColor(Color.rgb(24, 32, 48)); t.setPadding(0, dp(4), 0, dp(4)); host.addView(t); return t;
     }
     Button button(String s, Runnable fn) {
-        Button b = new Button(this); b.setText(s); root.addView(b, new LinearLayout.LayoutParams(-1, dp(54)));
+        return button(root, s, fn);
+    }
+    Button button(LinearLayout host, String s, Runnable fn) {
+        Button b = new Button(this); b.setText(s); host.addView(b, new LinearLayout.LayoutParams(-1, dp(54)));
         b.setOnClickListener(v -> fn.run()); return b;
     }
     void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getWindow().setStatusBarColor(Color.rgb(240, 244, 250));
-        getWindow().setNavigationBarColor(Color.rgb(240, 244, 250));
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) getWindow().setNavigationBarContrastEnforced(false);
+        if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
+        else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        screen = new LinearLayout(this); screen.setOrientation(1);
+        screen.setBackgroundColor(Color.rgb(240, 244, 250));
+        header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
+        text(header, "对称黑边 1.2", 24);
+        status = text(header, "", 12); status.setMaxLines(2);
+        rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);
-        root.setBackgroundColor(Color.rgb(240, 244, 250)); scroll.addView(root); setContentView(scroll);
-        text("对称黑边 1.1", 28); text("黑边 · 圆角 · 可选 Root 显示同步", 15);
-        button("关闭遮罩并恢复原始显示", this::restoreDisplay);
-        status = text("", 13); rootStatus = text("", 14);
-        keepButton = button("确认并保留当前分辨率", () -> {
+        scroll.setClipToPadding(true); scroll.addView(root);
+        screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        footer = new LinearLayout(this); footer.setOrientation(1); screen.addView(footer);
+        keepButton = button(footer, "确认并保留当前分辨率", () -> {
             RootSyncService s = RootSyncService.instance; if (s != null) s.confirm(); update();
         });
+        button(footer, "恢复原始显示并关闭遮罩", this::restoreDisplay);
+        screen.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (Build.VERSION.SDK_INT >= 30) {
+                Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                screen.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+                darkSystemIcons();
+                return WindowInsets.CONSUMED;
+            }
+            int left = insets.getSystemWindowInsetLeft(), top = insets.getSystemWindowInsetTop();
+            int right = insets.getSystemWindowInsetRight(), bottom = insets.getSystemWindowInsetBottom();
+            if (Build.VERSION.SDK_INT >= 28 && insets.getDisplayCutout() != null) {
+                DisplayCutout cutout = insets.getDisplayCutout();
+                left = Math.max(left, cutout.getSafeInsetLeft()); top = Math.max(top, cutout.getSafeInsetTop());
+                right = Math.max(right, cutout.getSafeInsetRight()); bottom = Math.max(bottom, cutout.getSafeInsetBottom());
+            }
+            screen.setPadding(left, top, right, bottom);
+            return insets.consumeSystemWindowInsets();
+        });
+        setContentView(screen);
+        screen.post(() -> { darkSystemIcons(); screen.requestApplyInsets(); });
+        text("黑边 · 圆角 · 可选 Root 显示同步", 15);
         preview = new Preview(this); root.addView(preview, new LinearLayout.LayoutParams(-1, dp(160)));
         text("显示方式", 18);
         RadioGroup modes = new RadioGroup(this);
@@ -64,10 +101,14 @@ public class MainActivity extends Activity {
                 updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
                 toast("请先点击检测并申请 Root 权限"); return;
             }
+            if (checked && rootWidthLimit() == 0) {
+                updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
+                toast("当前显示宽度已到安全下限，无法进一步收窄"); return;
+            }
             Config.stop(this); Config.prefs(this).edit().putBoolean("rootWanted", checked).apply(); update();
         });
         button("检测并申请 Root 权限", this::requestRoot);
-        text("Root：系统按黑条宽度居中收窄，应用重新排版；圆角仍由遮罩绘制。每侧最多 15%，可见短边至少 320 dp。DPI 保持不变。每次改动需在 15 秒内确认，否则恢复。此功能尚未经真机验证，无法保证所有 ROM 稳定。", 13);
+        text("Root：收窄逻辑尺寸并关闭自动缩放，校验画面确实居中后才保留。若系统仍拉伸或无法校验，会恢复尺寸与缩放，继续普通黑边。圆角由遮罩绘制。每侧最多 15%，可见短边至少 320 dp；DPI 不变。每次改动需在 15 秒内确认，否则恢复。需验证你的 ROM 是否兼容。", 13);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
         button("启用 / 应用当前设置", this::startMask);
@@ -83,11 +124,40 @@ public class MainActivity extends Activity {
             startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
         });
         button("恢复默认遮罩参数", () -> { width.setProgress(4); radius.setProgress(32); });
-        button("查看备用恢复方法", () -> new AlertDialog.Builder(this).setTitle("显示异常时恢复")
-            .setMessage("不要卸载应用或撤销 Root 后再恢复。优先等待自动回退，或点击页面顶部恢复按钮。\n\n若自动回退不可用，可从已授权的电脑执行：\nadb shell su -c 'wm size reset'\n\n这会恢复默认尺寸；若原来有自定义尺寸，请使用原来的 WxH。Root 模式不修改 DPI，不需要重置密度。\n\n重启/更新后应用会尝试恢复，但 ROM 或 Root 管理器可能阻止。恢复成功前不要开启新会话。")
-            .setPositiveButton("知道了", null).show());
+        button("查看备用恢复方法", this::showRecoveryHelp);
         text("非 Root 模式仅遮住内容，不改变应用布局。普通悬浮窗拦截黑条及圆角方块内的触摸。Root 模式会在旋转、移除应用任务或监控异常时恢复，并且不会开机自动启用。AI 编写；建议首次只用每侧 1% 测试。", 13);
         update();
+    }
+    void darkSystemIcons() {
+        if (Build.VERSION.SDK_INT >= 30 && getWindow().getInsetsController() != null) {
+            int flags = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            getWindow().getInsetsController().setSystemBarsAppearance(flags, flags);
+        }
+    }
+    void showRecoveryHelp() {
+        String command = "wm size reset; wm scaling auto";
+        String note = "以下命令适用于原先使用默认尺寸与自动缩放的情况。原来已有修改时，应改用原始 WxH 和 auto / off。";
+        if (RootController.hasBackup(this)) {
+            try {
+                DisplayProfile original = RootController.load(this);
+                command = "wm size " + original.restoreArgument();
+                if (original.scalingMode != DisplayScaling.UNKNOWN)
+                    command += "; wm scaling " + DisplayScaling.argument(original.scalingMode);
+                note = original.scalingMode == DisplayScaling.UNKNOWN
+                    ? "以下命令根据旧版尺寸备份生成。旧版未修改缩放，不额外重置缩放。"
+                    : "以下命令根据本次会话的原始尺寸与缩放备份生成。";
+            } catch (Exception e) { note = "原始备份无法读取，请核对原始设置后使用命令。"; }
+        }
+        new AlertDialog.Builder(this).setTitle("显示异常时恢复")
+            .setMessage("优先等待自动回退，或点击页面底部恢复按钮。\n\n" + note
+                + "\n从此前已授权的电脑执行：\nadb shell su -c '" + command + "'"
+                + "\n\nDPI 未修改，无需重置密度。恢复成功前不要卸载应用、清除数据或撤销 Root。重启/更新后会尝试恢复，但 ROM 或 Root 管理器可能阻止。")
+            .setPositiveButton("知道了", null).show();
+    }
+    int rootWidthLimit() {
+        DisplayProfile p = RootController.grantedProfile;
+        return p == null ? 0 : p.maximumPercent(getWindowManager().getDefaultDisplay().getRotation());
     }
     SeekBar slider(String title, int max, String unit, String key, int initial) {
         TextView label = text("", 16); SeekBar s = new SeekBar(this); s.setMax(max);
@@ -158,7 +228,12 @@ public class MainActivity extends Activity {
         int side = dp(24);
         if (Config.enabled(this) && !Config.rootApplied()) side = Math.max(side,
             getResources().getDisplayMetrics().widthPixels * Config.prefs(this).getInt("width", 4) / 100 + dp(10));
-        root.setPadding(side, dp(42), side, dp(32));
+        root.setPadding(side, dp(8), side, dp(12));
+        header.setPadding(side, dp(6), side, dp(6)); footer.setPadding(side, dp(6), side, dp(8));
+        if (width != null) {
+            int max = Config.rootWanted(this) ? rootWidthLimit() : 25;
+            if (width.getMax() != max) width.setMax(max);
+        }
         if (status != null) status.setText("遮罩：" + (Config.enabled(this) ? "已启用" : "已关闭")
             + "  |  无障碍：" + (MaskAccessibility.instance != null ? "已连接" : "未连接")
             + "  |  悬浮窗：" + (Settings.canDrawOverlays(this) ? "已授权" : "未授权"));
@@ -168,14 +243,24 @@ public class MainActivity extends Activity {
             ? "\n请确认显示及触摸正常；" + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒后自动恢复"
             : "\n已确认；服务停止或心跳丢失时恢复原始显示";
         if (rootStatus != null) rootStatus.setText(RootController.message + extra);
-        if (keepButton != null) { boolean show = session != null && session.canConfirm();
-            keepButton.setVisibility(show ? View.VISIBLE : View.GONE); keepButton.setEnabled(show); }
+        if (keepButton != null) {
+            boolean show = session != null && session.pending && !session.stopping;
+            boolean canConfirm = session != null && session.canConfirm();
+            keepButton.setVisibility(show ? View.VISIBLE : View.GONE); keepButton.setEnabled(canConfirm);
+            keepButton.setText(canConfirm ? "确认并保留 · "
+                + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒" : "正在应用分辨率…");
+        }
         if (rootSwitch != null && rootSwitch.isChecked() != Config.rootWanted(this)) {
             updatingSwitch = true; rootSwitch.setChecked(Config.rootWanted(this)); updatingSwitch = false;
         }
     }
-    @Override public void onConfigurationChanged(Configuration c) { super.onConfigurationChanged(c); update(); preview.invalidate(); }
-    @Override protected void onResume() { super.onResume(); ui.removeCallbacks(refreshStatus); ui.post(refreshStatus); }
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c); update(); preview.invalidate(); screen.requestApplyInsets();
+    }
+    @Override protected void onResume() {
+        super.onResume(); darkSystemIcons(); ui.removeCallbacks(refreshStatus); ui.post(refreshStatus);
+        if (screen != null) screen.requestApplyInsets();
+    }
     @Override protected void onPause() { ui.removeCallbacks(refreshStatus); super.onPause(); }
     @Override protected void onDestroy() { ui.removeCallbacks(refreshStatus); tasks.shutdown(); super.onDestroy(); }
     final class Preview extends View {

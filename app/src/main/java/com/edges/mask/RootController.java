@@ -10,6 +10,7 @@ import java.util.Properties;
 
 final class RootController {
     static volatile boolean available, recovering;
+    static volatile DisplayProfile grantedProfile;
     static volatile String message = "Root 未申请；默认仅显示遮罩";
     static final String QUERY = "/system/bin/wm size && /system/bin/wm density";
 
@@ -36,17 +37,25 @@ final class RootController {
     static boolean hasBackup(Context c) {
         try { return file(c, "backup.properties").isFile(); } catch (IOException e) { return false; }
     }
-    static DisplayProfile query() throws Exception { return DisplayProfile.parse(RootShell.run(QUERY, 8).checked()); }
+    static DisplayProfile query() throws Exception {
+        String scaling = DisplayScaling.queryCommand(RootShell.quote("/system/bin/dumpsys"));
+        DisplayProfile p = DisplayProfile.parse(RootShell.run(QUERY + " && " + scaling, 8).checked());
+        if (p.scalingMode == DisplayScaling.UNKNOWN) throw new IOException("无法确认 ROM 的缩放状态，拒绝 Root 修改");
+        return p;
+    }
+    static void verifyProjection(DisplayProfile original, int[] target, int rotation) throws Exception {
+        String data = RootShell.run("/system/bin/dumpsys input | grep -E '(Viewport|logicalFrame|physicalFrame)'", 4).checked();
+        DisplayProjection.parse(data).requireCentered(original, target, rotation);
+    }
 
     static synchronized DisplayProfile probe(Context c) throws Exception {
-        available = false;
+        available = false; grantedProfile = null;
         if (!"0".equals(RootShell.run("id -u", 45).checked().trim())) throw new IOException("未获得 Root 权限");
         if (hasBackup(c)) restore(c);
         if (android.os.Process.myUid() / 100000 != 0) throw new IOException("暂只支持手机主用户");
-        String scale = RootShell.run("/system/bin/settings get global display_scaling_force", 8).checked().trim();
-        if (!scale.equals("null") && !scale.equals("0")) throw new IOException("系统关闭了自动缩放，Root 模式暂不支持");
         RootShell.run("command -v nohup >/dev/null", 5).checked();
-        DisplayProfile p = query(); p.validateBaseline();
+        DisplayProfile p = query(); p.validateNoScaleBaseline();
+        grantedProfile = p;
         available = true; message = "Root 已授权；原始 " + p.width + "×" + p.height + "，DPI " + p.density;
         return p;
     }
@@ -58,6 +67,7 @@ final class RootController {
         values.setProperty("physicalHeight", "" + p.physicalHeight);
         values.setProperty("width", "" + p.width); values.setProperty("height", "" + p.height);
         values.setProperty("density", "" + p.density); values.setProperty("override", "" + p.overridden);
+        values.setProperty("scaling", "" + p.scalingMode);
         File temp = file(c, "backup.tmp");
         try (FileOutputStream out = new FileOutputStream(temp)) { values.store(out, "Original display size"); out.getFD().sync(); }
         Files.move(temp.toPath(), file(c, "backup.properties").toPath(), StandardCopyOption.ATOMIC_MOVE);
@@ -68,10 +78,11 @@ final class RootController {
         return new DisplayProfile(Integer.parseInt(p.getProperty("physicalWidth")),
             Integer.parseInt(p.getProperty("physicalHeight")), Integer.parseInt(p.getProperty("width")),
             Integer.parseInt(p.getProperty("height")), Integer.parseInt(p.getProperty("density")),
-            Boolean.parseBoolean(p.getProperty("override")));
+            Boolean.parseBoolean(p.getProperty("override")), Integer.parseInt(p.getProperty("scaling", "-1")));
     }
 
     static synchronized void arm(Context c, DisplayProfile p, long expirySeconds) throws Exception {
+        DisplayScaling.argument(p.scalingMode);
         if (hasBackup(c)) throw new IOException("旧会话尚未恢复，拒绝启动新的回退进程");
         for (String s : new String[]{"stop", "ready", "state", "pid"}) {
             File f = file(c, s);
@@ -81,7 +92,7 @@ final class RootController {
         for (String s : new String[]{"ready", "state", "pid", "rollback.log", "target", "applied", "bootid"}) write(file(c, s), "");
         save(c, p); lease(c, expirySeconds);
         File script = file(c, "watchdog.sh");
-        write(script, GuardScript.build(directory(c).getAbsolutePath(), p, "/system/bin/wm", "/proc/uptime"));
+        write(script, GuardScript.build(directory(c).getAbsolutePath(), p, "/system/bin/wm", "/proc/uptime", "/system/bin/dumpsys"));
         RootShell.run("nohup /system/bin/sh " + RootShell.quote(script.getAbsolutePath())
             + " </dev/null >/dev/null 2>&1 &", 5).checked();
         long end = SystemClock.elapsedRealtime() + 3000;
@@ -123,8 +134,18 @@ final class RootController {
         if (sameBoot && !state.equals("restored") && !state.equals("failed") && pid.matches("[1-9][0-9]{0,8}")
                 && RootShell.run("kill -0 " + pid, 3).code == 0)
             throw new IOException("回退进程仍在处理中，请稍后再次恢复；禁止再次修改");
-        RootShell.run("/system/bin/wm size " + original.restoreArgument(), 8).checked();
-        if (!original.sameSize(query())) throw new IOException("恢复校验失败，请使用备用恢复命令");
+        String restore = "/system/bin/wm size " + original.restoreArgument();
+        if (original.scalingMode != DisplayScaling.UNKNOWN) {
+            // Try both restores even if the first command fails. Never modify density.
+            restore += "; sized=$?; /system/bin/wm scaling " + DisplayScaling.argument(original.scalingMode)
+                + "; scaled=$?; [ \"$sized\" -eq 0 ] && [ \"$scaled\" -eq 0 ]";
+        }
+        RootShell.run(restore, 8).checked();
+        DisplayProfile current = original.scalingMode == DisplayScaling.UNKNOWN
+            ? DisplayProfile.parse(RootShell.run(QUERY, 8).checked()) : query();
+        if (!original.sameSize(current) || (original.scalingMode != DisplayScaling.UNKNOWN
+                && original.scalingMode != current.scalingMode))
+            throw new IOException("尺寸或缩放恢复校验失败，请使用备用恢复命令");
         if (hasBackup(c) && !file(c, "backup.properties").delete()) throw new IOException("显示已恢复，但备份清理失败");
     }
 }

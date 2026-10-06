@@ -16,10 +16,12 @@ public final class SafetyChecks {
     public static void main(String[] args) throws Exception {
         if (args.length == 3) {
             DisplayProfile p = args[2].equals("override")
-                ? new DisplayProfile(1440, 3200, 1080, 2400, 420, true)
-                : new DisplayProfile(1080, 2400, 1080, 2400, 420, false);
+                ? new DisplayProfile(1440, 3200, 1080, 2400, 420, true, DisplayScaling.AUTO)
+                : new DisplayProfile(1080, 2400, 1080, 2400, 420, false,
+                    args[2].equals("off") ? DisplayScaling.OFF : DisplayScaling.AUTO);
             Files.write(Paths.get(args[0], "watchdog.sh"),
-                GuardScript.build(args[0], p, args[1], Paths.get(args[0], "clock").toString()).getBytes(StandardCharsets.UTF_8));
+                GuardScript.build(args[0], p, args[1], Paths.get(args[0], "clock").toString(),
+                    Paths.get(args[0], "mock-dumpsys").toString()).getBytes(StandardCharsets.UTF_8));
             return;
         }
         DisplayProfile p = DisplayProfile.parse("Physical size: 1080x2400\nPhysical density: 420\n");
@@ -38,15 +40,61 @@ public final class SafetyChecks {
         rejects(() -> p.target(15, 0), "reject too small usable width");
         rejects(() -> p.target(-1, 0), "reject negative percentages");
         rejects(() -> p.target(1, 4), "reject invalid rotation");
+        check(p.maximumPercent(0) == 11, "portrait slider stops before minimum usable width");
+        check(p.maximumPercent(1) == 15, "landscape slider uses rotated axis");
+        DisplayProfile recorded = new DisplayProfile(1440, 3200, 1440, 3200, 560, false);
+        check(recorded.maximumPercent(0) == 11, "recorded device limits shrinking before 320 dp");
+        check(new DisplayProfile(1000, 2400, 1000, 2400, 500, false).maximumPercent(0) == 0,
+                "refuse shrinking a screen already at minimum width");
+        rejects(() -> p.maximumPercent(4), "reject invalid slider rotation");
         rejects(() -> DisplayProfile.parse("Override size: 900x2400\nPhysical density: 420\n"), "require physical size");
         rejects(() -> DisplayProfile.parse("Physical size: 1080x2400\nPhysical size: 1200x2400\nPhysical density: 420\n"), "reject ambiguous display");
         rejects(() -> DisplayProfile.parse("Physical size: 1080x2400\nPhysical density: 0\n"), "reject invalid dpi");
         rejects(() -> new DisplayProfile(1080, 2400, 900, 2400, 420, true).validateBaseline(), "reject custom aspect ratio");
         check(RootShell.quote("a'b").equals("'a'\\''b'"), "quote apostrophe without shell execution");
-        String script = GuardScript.build("/data/user_de/0/com.edges.mask/files/display-recovery", custom, "/system/bin/wm", "/proc/uptime");
+        custom = new DisplayProfile(1440, 3200, 1080, 2400, 420, true, DisplayScaling.AUTO);
+        String script = GuardScript.build("/data/user_de/0/com.edges.mask/files/display-recovery", custom,
+                "/system/bin/wm", "/proc/uptime", "/system/bin/dumpsys");
         check(script.contains("size '1080x2400'"), "watchdog restores original override");
-        check(!script.contains("wm density") && !script.contains("scaling auto") && !script.contains("settings put"), "no density/scaling mutations");
+        check(!script.contains("wm density") && !script.contains("settings put"), "no density/global-setting mutations");
         check(!script.contains("rm -f"), "independent watchdog retains recovery record");
+        check(script.contains("scaling 'auto'"), "restore original auto scaling");
+        check(GuardScript.build("/tmp/guard", new DisplayProfile(1080, 2400, 1080, 2400, 420, false, DisplayScaling.OFF),
+            "/mock/wm", "/mock/clock", "/mock/dumpsys").contains("scaling 'off'"), "restore original off scaling");
+        rejects(() -> GuardScript.build("/tmp/guard", p, "/mock/wm", "/mock/clock", "/mock/dumpsys"),
+                "refuse arming without a known scaling backup");
+        check(DisplayScaling.parse("EdgeMask scaling: off\n") == DisplayScaling.OFF, "read verified off mode");
+        check(DisplayScaling.parse("EdgeMask scaling: auto\n") == DisplayScaling.AUTO, "read verified auto mode");
+        check(DisplayScaling.parse("unsupported ROM") == DisplayScaling.UNKNOWN, "unknown scaling is never assumed auto");
+        rejects(() -> DisplayScaling.parse("EdgeMask scaling: auto\nEdgeMask scaling: off\n"), "reject contradictory modes");
+        rejects(() -> DisplayScaling.argument(DisplayScaling.UNKNOWN), "unknown restore mode cannot become a command");
+        rejects(() -> new DisplayProfile(1440, 3200, 1080, 2400, 420, true, DisplayScaling.AUTO).validateNoScaleBaseline(),
+                "refuse scaled baselines that would also add top/bottom borders");
+        DisplayProfile nativeDisplay = new DisplayProfile(1440, 3200, 1440, 3200, 560, false, DisplayScaling.AUTO);
+        nativeDisplay.validateNoScaleBaseline();
+        String nativeRow = "Viewport INTERNAL: displayId=0, orientation=0, logicalFrame=[0,0,1296,3200], "
+            + "physicalFrame=[72,0,1368,3200], deviceSize=[1440,3200]";
+        DisplayProjection centered = DisplayProjection.parse(nativeRow);
+        centered.requireCentered(nativeDisplay, new int[]{1296,3200}, 0);
+        check(centered.physical[0] == 72, "verify real centered 5 percent side borders");
+        rejects(() -> DisplayProjection.parse(nativeRow.replace("[72,0,1368,3200]", "[0,0,1440,3200]"))
+            .requireCentered(nativeDisplay, new int[]{1296,3200}, 0), "reject ROM stretching to full panel");
+        rejects(() -> DisplayProjection.parse(nativeRow.replace("[72,0,1368,3200]", "[0,0,1296,3200]"))
+            .requireCentered(nativeDisplay, new int[]{1296,3200}, 0), "reject viewport shifted to one side");
+        rejects(() -> DisplayProjection.parse(nativeRow).requireCentered(nativeDisplay, new int[]{1296,3200}, 1), "reject stale rotation");
+        String javaRow = "DisplayViewport{type=INTERNAL, valid=true, isActive=true, displayId=0, orientation=0, "
+            + "logicalFrame=Rect(0, 0 - 1296, 3200), physicalFrame=Rect(72, 0 - 1368, 3200), deviceWidth=1440, deviceHeight=3200}";
+        DisplayProjection.parse(javaRow + "\n" + nativeRow).requireCentered(nativeDisplay, new int[]{1296,3200}, 0);
+        check(true, "accept equivalent Java and native viewport reports");
+        rejects(() -> DisplayProjection.parse(javaRow.replace("valid=true", "valid=false")), "reject inactive viewport");
+        rejects(() -> DisplayProjection.parse(nativeRow.replace("displayId=0", "displayId=2")), "do not use another display as proof");
+        rejects(() -> DisplayProjection.parse(javaRow + "\n" + nativeRow.replace("[72,0,1368,3200]", "[0,0,1440,3200]")),
+                "reject inconsistent mapping snapshots");
+        DisplayProjection.parse(nativeRow.replace("orientation=0", "orientation=1")
+            .replace("[0,0,1296,3200]", "[0,0,2880,1440]")
+            .replace("[72,0,1368,3200]", "[160,0,3040,1440]")
+            .replace("[1440,3200]", "[3200,1440]")).requireCentered(nativeDisplay, new int[]{1440,2880}, 1);
+        check(true, "validate landscape borders using rotated physical coordinates");
         System.out.println("PASS: " + checks + " profile and rollback-policy checks");
     }
 }
