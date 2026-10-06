@@ -1,0 +1,27 @@
+package com.edges.mask;
+import android.app.*;import android.os.*;import android.content.*;import android.graphics.*;import android.net.Uri;import android.provider.Settings;import android.view.*;import android.widget.*;
+public class MainActivity extends Activity {
+ LinearLayout root;TextView status;Preview preview;SeekBar width,radius;RadioGroup modes;
+ int dp(float v){return Math.round(v*getResources().getDisplayMetrics().density);}
+ TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(Color.rgb(24,32,48));t.setPadding(0,dp(8),0,dp(8));root.addView(t);return t;}
+ void button(String s,Runnable fn){Button b=new Button(this);b.setText(s);root.addView(b,new LinearLayout.LayoutParams(-1,dp(52)));b.setOnClickListener(v->fn.run());}
+ public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(Color.rgb(240,244,250));getWindow().setNavigationBarColor(Color.rgb(240,244,250));
+ ScrollView scroll=new ScrollView(this);root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(32),dp(42),dp(32),dp(32));root.setBackgroundColor(Color.rgb(240,244,250));scroll.addView(root);setContentView(scroll);
+ text("对称黑边",30);text("收窄视觉边界 · 自定义圆角",15);preview=new Preview(this);root.addView(preview,new LinearLayout.LayoutParams(-1,dp(200)));
+ status=text("",14);text("显示方式",18);modes=new RadioGroup(this);RadioButton a=new RadioButton(this);a.setId(101);a.setText("无障碍遮罩（推荐，触摸穿透）");RadioButton o=new RadioButton(this);o.setId(102);o.setText("普通悬浮窗");modes.addView(a);modes.addView(o);root.addView(modes);modes.check(Config.access(this)?101:102);
+ modes.setOnCheckedChangeListener((g,id)->{Config.stop(this);Config.prefs(this).edit().putBoolean("access",id==101).apply();update();});
+ width=slider("每侧黑条宽度",25,"% 屏幕宽度", "width",4);radius=slider("内边框圆角半径",160,"dp", "radius",32);
+ button("启用遮罩",()->startMask());button("关闭遮罩",()->{Config.stop(this);update();});
+ button("授予无障碍权限",()->new AlertDialog.Builder(this).setTitle("无障碍权限用途").setMessage("仅绘制黑边与圆角，不读取屏幕文字、不采集内容、不执行点击。继续后请找到“对称黑边 · 无障碍遮罩”并手动开启，然后返回应用点击启用。").setPositiveButton("打开设置",(d,which)->startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))).setNegativeButton("取消",null).show());
+ button("授予在其他应用上层显示权限",()->startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName()))));
+ button("恢复默认参数",()->{width.setProgress(4);radius.setProgress(32);});
+ text("参数实时保存；横竖屏自动适配。黑边仅遮住内容，不改变应用布局。普通悬浮窗会拦截边条与圆角小方块范围内的触摸；需要完整触摸穿透时使用无障碍模式。",13);
+ text("如权限页无法点击，请先关闭遮罩。系统安全页面可能隐藏悬浮窗。小米/HyperOS 如后台停止显示，请在应用设置允许后台运行。",13);
+ }
+ SeekBar slider(String title,int max,String unit,String key,int initial){TextView label=text("",16);SeekBar s=new SeekBar(this);s.setMax(max);s.setProgress(Config.prefs(this).getInt(key,initial));label.setText(title+"："+s.getProgress()+" "+unit);root.addView(s);s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){public void onProgressChanged(SeekBar v,int value,boolean user){label.setText(title+"："+value+" "+unit);Config.prefs(MainActivity.this).edit().putInt(key,value).apply();Config.refresh(MainActivity.this);preview.invalidate();update();}public void onStartTrackingTouch(SeekBar s){}public void onStopTrackingTouch(SeekBar s){}});LinearLayout row=new LinearLayout(this);for(int delta:new int[]{-1,1}){Button step=new Button(this);step.setText(delta<0?"−1":"+1");row.addView(step,new LinearLayout.LayoutParams(0,dp(44),1));step.setOnClickListener(v->s.setProgress(Math.max(0,Math.min(max,s.getProgress()+delta))));}root.addView(row);return s;}
+ void startMask(){if(Config.access(this)){if(MaskAccessibility.instance==null){Toast.makeText(this,"请先开启无障碍服务，再返回启用",Toast.LENGTH_LONG).show();return;}}else{if(!Settings.canDrawOverlays(this)){Toast.makeText(this,"请先授予在其他应用上层显示权限",Toast.LENGTH_LONG).show();return;}if(Build.VERSION.SDK_INT>=33&&checkSelfPermission("android.permission.POST_NOTIFICATIONS")!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"},1);}
+ Config.prefs(this).edit().putBoolean("enabled",true).apply();try{if(Config.access(this))Config.refresh(this);else startForegroundService(new Intent(this,OverlayService.class));}catch(RuntimeException e){Config.stop(this);Toast.makeText(this,"启动失败："+e.getClass().getSimpleName(),Toast.LENGTH_LONG).show();}update();}
+ void update(){if(root!=null){int side=dp(32);if(Config.enabled(this))side=Math.max(side,getResources().getDisplayMetrics().widthPixels*Config.prefs(this).getInt("width",4)/100+dp(12));root.setPadding(side,dp(42),side,dp(32));}if(status!=null)status.setText("遮罩："+(Config.enabled(this)?"已启用":"已关闭")+"  |  无障碍："+(MaskAccessibility.instance!=null?"已连接":"未连接")+"  |  悬浮窗："+(Settings.canDrawOverlays(this)?"已授权":"未授权"));}
+ protected void onResume(){super.onResume();update();}
+ class Preview extends View{Paint paint=new Paint(3);Preview(Context c){super(c);}protected void onDraw(Canvas c){float w=getWidth(),h=getHeight(),b=w*Config.prefs(MainActivity.this).getInt("width",4)/100f,r=Math.min(dp(Config.prefs(MainActivity.this).getInt("radius",32)),Math.min((w-2*b)/2,h/2));paint.setColor(Color.BLACK);c.drawRoundRect(0,0,w,h,dp(12),dp(12),paint);paint.setColor(Color.rgb(133,182,240));c.drawRoundRect(b,0,w-b,h,r,r,paint);paint.setColor(Color.WHITE);paint.setTextSize(dp(18));paint.setTextAlign(Paint.Align.CENTER);c.drawText("圆角效果预览",w/2,h/2,paint);}}
+}

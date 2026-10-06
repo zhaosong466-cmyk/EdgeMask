@@ -1,0 +1,1 @@
+<resources><string name="accessibility_description">仅用于绘制对称黑边和圆角遮罩，不读取屏幕内容、不执行手势。开启后返回应用，点击启用。可随时在应用内关闭。</string></resources>
