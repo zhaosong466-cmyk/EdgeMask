@@ -1,0 +1,6 @@
+id=edgemask_qti_framebuffer
+name=EdgeMask QTI framebuffer compatibility
+version=1.0
+versionCode=1
+author=ChatGPT / Codex (AI-written)
+description=Disable the verified QTI framebuffer projection override at boot; use EdgeMask for live width changes. Reboot after installation or removal.

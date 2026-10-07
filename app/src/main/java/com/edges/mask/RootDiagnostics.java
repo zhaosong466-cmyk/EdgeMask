@@ -7,7 +7,7 @@ import java.util.Arrays;
 /** Explicit, read-only collection. No mutation, screenshot, network, or automatic upload. */
 final class RootDiagnostics {
     static String collect(Context c) {
-        StringBuilder report = new StringBuilder("EdgeMask 1.5.1 显示诊断（只读）\n");
+        StringBuilder report = new StringBuilder("EdgeMask 1.6 显示诊断（只读）\n");
         report.append("制造商: ").append(Build.MANUFACTURER)
             .append("\n机型: ").append(Build.MODEL).append("\n设备代号: ").append(Build.DEVICE)
             .append("\nAndroid: ").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT)
@@ -22,6 +22,9 @@ final class RootDiagnostics {
         } catch (Exception e) {
             report.append("Root 授权未完成: ").append(e.getMessage()).append('\n'); return report.toString();
         }
+        report.append("\n[QTI 缩放兼容模块]\n");
+        try { report.append(FramebufferCompat.status()); }
+        catch(Exception e) { report.append("状态读取未完成: ").append(e.getMessage()).append('\n'); }
         report.append("\n[尺寸与缩放]\n");
         try {
             DisplayProfile p = RootController.query();

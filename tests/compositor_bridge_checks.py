@@ -47,7 +47,7 @@ public class State {public final Properties p=new Properties();final Path file;
  public void save(){try(OutputStream out=Files.newOutputStream(file)){p.store(out,"");}catch(Exception e){throw new RuntimeException(e);}}
  public void log(String line){try {Files.write(file.resolveSibling("writes"),(line+"\\n").getBytes("UTF-8"),StandardOpenOption.CREATE,StandardOpenOption.APPEND);}catch(Exception e){throw new RuntimeException(e);}}
  public void backup(boolean size){try {Properties b=new Properties();try(InputStream in=Files.newInputStream(file.resolveSibling("compositor.properties"))){b.load(in);}
-  if(!"1440".equals(b.getProperty("width"))||!"3200".equals(b.getProperty("height"))||!get("originalGpu").equals(b.getProperty("gpu")))throw new Exception("original backup lost");
+  if(!"1440".equals(b.getProperty("width"))||!"3200".equals(b.getProperty("height"))||!get("expectedGpu").equals(b.getProperty("gpu")))throw new Exception("original backup lost");
   if(size&&!"true".equals(b.getProperty("outputSizeRequested")))throw new Exception("size marker missing before mutation");
  }catch(Exception e){throw new RuntimeException(e);}}
 }
@@ -68,10 +68,13 @@ public class SurfaceControl {
   public void apply(boolean sync){State s=new State();
    if(w!=0){s.backup(true);s.log("size "+w+"x"+h);
     if("1".equals(s.get("restoreSizeFailure")))throw new IllegalStateException("simulated restore-size failure");
-    if(!"ignored".equals(s.get("mode"))){s.put("nw",w);s.put("nh",h);s.put("fw",w);s.put("fh",h);s.save();}
+    if(!"ignored".equals(s.get("mode"))&&!"qti_override".equals(s.get("mode"))){s.put("nw",w);s.put("nh",h);s.put("fw",w);s.put("fh",h);s.save();}
     if("size_failure".equals(s.get("mode"))&&s.n("lw")!=1440)throw new IllegalStateException("simulated partial size failure");
    }
-   if(source!=null){s.backup(false);s.log("project "+dest);s.put("rotation",r);s.put("out",dest);s.put("layer",source);s.save();
+   if(source!=null){s.backup(false);s.log("project "+dest);s.put("rotation",r);s.put("out",dest);s.put("layer",source);
+    // Model the verified QTI extension: output rectangle is overwritten by source.
+    if("qti_override".equals(s.get("mode")))s.put("out",source);
+    s.save();
     if("project_failure".equals(s.get("mode"))&&s.n("lw")!=1440)throw new IllegalStateException("simulated partial projection failure");}
   }
  }
@@ -121,9 +124,12 @@ def run_case(classes, folder, name):
     folder.mkdir()
     state = folder / 'state'
     original_gpu = 1 if name == 'gpu_on' else 0
-    mode = name if name in ('ignored', 'size_failure', 'project_failure') else 'honored'
+    mode = name if name in ('ignored', 'size_failure', 'project_failure', 'qti_override') else 'honored'
+    force_gpu = name != 'qti_disabled_gpu_off'
+    qti_disabled = name in ('qti_disabled', 'qti_disabled_gpu_off')
     p = dict(lw=1440, lh=3200, nw=1440, nh=3200, fw=1440, fh=3200,
-             rotation=0, gpu=original_gpu, originalGpu=original_gpu, mode=mode,
+             rotation=0, gpu=original_gpu, originalGpu=original_gpu,
+             expectedGpu=original_gpu if force_gpu else -1, mode=mode,
              out='0,0,1440,3200', layer='0,0,1440,3200')
     write_props(state, p)
     env = dict(os.environ, EDGE_STATE=str(state))
@@ -134,18 +140,28 @@ def run_case(classes, folder, name):
         assert (result.returncode == 0) == succeeds, (name, action, result.stdout, result.stderr)
         return result
 
-    bridge('prepare', 1440, 3200, 0, 1)
+    bridge('prepare', 1440, 3200, 0, int(force_gpu))
     backup = read_props(folder / 'compositor.properties')
     assert backup['frameWidth'] == '1440' and backup['frameHeight'] == '3200'
     assert not (folder / 'writes').exists(), 'prepare must remain read-only'
-    p.update(lw=1354, nw=1354, fw=1354, out='0,0,1354,3200', layer='0,0,1354,3200')
+    p.update(lw=1354, layer='0,0,1354,3200')
+    if qti_disabled:
+        # WM projection retains the original output raster when the QTI feature is off.
+        p.update(out='43,0,1397,3200')
+    else:
+        p.update(nw=1354, fw=1354, out='0,0,1354,3200')
     write_props(state, p)
-    failure = name in ('size_failure', 'project_failure')
+    failure = name in ('size_failure', 'project_failure', 'qti_override')
     bridge('apply', 1354, 3200, succeeds=not failure)
     report = (folder / 'compositor-report.txt').read_text()
-    assert 'after-wm 1354x3200:' in report and 'restore-buffer-request: 1440x3200' in report
-    assert read_props(folder / 'compositor.properties')['outputSizeRequested'] == 'true'
-    assert read_props(folder / 'compositor.properties')['gpu'] == str(original_gpu)
+    assert 'after-wm 1354x3200:' in report
+    if qti_disabled:
+        assert 'restore-buffer-request' not in report
+        assert 'outputSizeRequested' not in read_props(folder / 'compositor.properties')
+    else:
+        assert 'restore-buffer-request: 1440x3200' in report
+        assert read_props(folder / 'compositor.properties')['outputSizeRequested'] == 'true'
+    assert read_props(folder / 'compositor.properties')['gpu'] == str(p['expectedGpu'])
     if not failure:
         bridge('check', 1354, 3200)
         out = read_props(state)['out']
@@ -165,7 +181,13 @@ def run_case(classes, folder, name):
     assert final['out'] == ('0,0,3200,1440' if name == 'rotation' else '0,0,1440,3200')
     assert final['nw'] == '1440' and final['fw'] == '1440'
     writes = (folder / 'writes').read_text().splitlines()
-    assert writes[-3].startswith('gpu ') and writes[-2] == 'size 1440x3200' and writes[-1].startswith('project '), writes
+    assert writes[-1].startswith('project '), writes
+    if qti_disabled:
+        assert not any(line.startswith('size ') for line in writes), writes
+        if not force_gpu:
+            assert not any(line.startswith('gpu ') for line in writes), writes
+    else:
+        assert writes[-3].startswith('gpu ') and writes[-2] == 'size 1440x3200', writes
     assert (folder / 'compositor.properties').exists(), 'retain original backup for watchdog verification'
     if name == 'restore_size_failure':
         p = read_props(state); p['restoreSizeFailure'] = 0; write_props(state, p)
@@ -188,5 +210,6 @@ if __name__ == '__main__':
             path = src / 'com/edges/mask' / (name + '.java'); path.parent.mkdir(parents=True, exist_ok=True); path.write_text(content)
         compiler = ['java', '-jar', str(Path(sys.argv[1]).resolve()), '-source', '8', '-target', '8'] if len(sys.argv)>1 else ['javac']
         subprocess.run([*compiler, '-d', str(classes), *map(str, src.rglob('*.java'))], check=True)
-        for case in ('honored', 'ignored', 'size_failure', 'project_failure', 'gpu_on', 'rotation', 'restore_size_failure'):
+        for case in ('honored', 'ignored', 'size_failure', 'project_failure', 'gpu_on', 'rotation',
+                     'restore_size_failure', 'qti_override', 'qti_disabled', 'qti_disabled_gpu_off'):
             run_case(classes, temp / case, case)

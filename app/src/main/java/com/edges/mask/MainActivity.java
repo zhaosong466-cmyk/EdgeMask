@@ -25,6 +25,7 @@ public class MainActivity extends Activity {
     boolean updatingSwitch, busy;
     File pendingEvidence;
     static final int SAVE_ROM_EVIDENCE=51;
+    static final int SAVE_FRAMEBUFFER_MODULE=52;
     final Handler ui = new Handler(Looper.getMainLooper());
     final ExecutorService tasks = Executors.newSingleThreadExecutor();
     final Runnable refreshStatus = new Runnable() {
@@ -58,7 +59,7 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.5.1 · 诊断版", 24);
+        text(header, "对称黑边 1.6", 24);
         if(saved!=null && saved.getString("romEvidence")!=null)
             pendingEvidence=new File(saved.getString("romEvidence"));
         status = text(header, "", 12); status.setMaxLines(2);
@@ -121,10 +122,11 @@ public class MainActivity extends Activity {
         gpuMode=new CheckBox(this); gpuMode.setText("GPU 合成兼容模式（尝试修正拉伸）");
         gpuMode.setChecked(Config.gpuCompatibility(this)); root.addView(gpuMode);
         gpuMode.setOnCheckedChangeListener((v,on) -> Config.prefs(this).edit().putBoolean("gpuCompatibility",on).apply());
-        text("Root 会收窄系统布局，优先保持原始输出尺寸；若系统同步收窄输出，则尝试通过 GPU 反向补偿拉伸。此模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
+        text("Root 收窄系统布局并保持内容居中。GPU 模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
+        button("修复分辨率修改后被拉伸（Root 模块）", this::showFramebufferCompat);
+        text("已定位反馈 ROM 的缩放覆盖路径。首次安装修复模块并重启一次，此后用本应用实时调宽度。模块可在 Root 管理器停用并重启撤回；圆角仍在应用中调整。",13);
         button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
         button("导出 ROM 显示组件（只读）", this::exportRomEvidence);
-        text("1.5.1 新增系统显示组件导出，用于定位投影不生效。该版尚未修复已反馈的拉伸；导出无需再次修改分辨率。",13);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
         button("启用 / 应用当前设置", this::startMask);
@@ -191,6 +193,56 @@ public class MainActivity extends Activity {
         }
         return true;
     }
+    void showFramebufferCompat() {
+        new AlertDialog.Builder(this).setTitle("修复缩放覆盖")
+            .setMessage("该 ROM 会覆盖居中位置并把窄画面铺满屏幕。修复模块在开机时关闭这条缩放路径；安装本 APK 本身不会修改开机设置。\n\n"
+                +"1. 先恢复原始显示。\n2. 保存模块 ZIP，在 Magisk / KernelSU 管理器中选择从本地安装。\n3. 手动重启一次，再回到本应用检测 Root、设置每侧 1% 并启用。此后调整宽度无需重启。\n\n"
+                +"模块只对已分析的显示库生效；系统更新改变显示库时会跳过。只修改一个内存中的缩放开关。\n\n"
+                +"撤回：先在应用恢复原始显示，再停用或移除模块并重启。卸载 APK 不会移除模块。请检查真机画面与触摸后再保留设置。")
+            .setPositiveButton("保存修复模块",(d,w)->{if(evidenceReady())chooseModuleDestination();})
+            .setNeutralButton("查看模块状态",(d,w)->readFramebufferStatus())
+            .setNegativeButton("关闭",null).show();
+    }
+    void chooseModuleDestination() {
+        Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/zip").putExtra(Intent.EXTRA_TITLE,FramebufferCompat.ARCHIVE);
+        try { startActivityForResult(save,SAVE_FRAMEBUFFER_MODULE); }
+        catch(ActivityNotFoundException e) {toast("未找到系统文件保存界面");}
+    }
+    void readFramebufferStatus() {
+        if(busy || RootController.recovering){toast("正在处理，请稍后");return;}
+        busy=true;update();
+        tasks.execute(()->{
+            String value;
+            try {value=FramebufferCompat.status();}
+            catch(Exception e){value="状态读取未完成："+e.getMessage();}
+            final String report=value;
+            ui.post(()->{busy=false;if(isDestroyed())return;
+                new AlertDialog.Builder(this).setTitle("修复模块状态（只读）")
+                    .setMessage(report).setPositiveButton("知道了",null).show();update();});
+        });
+    }
+    void saveFramebufferModule(Uri destination) {
+        busy=true;update();
+        tasks.execute(()->{
+            boolean success=false;
+            try(InputStream in=getAssets().open(FramebufferCompat.ARCHIVE);
+                OutputStream out=getContentResolver().openOutputStream(destination,"wt")) {
+                if(out==null)throw new IOException("无法写入所选文件");
+                byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);
+                out.flush();success=true;
+            }catch(Exception ignored) { }
+            final boolean saved=success;
+            ui.post(()->{busy=false;if(isDestroyed())return;
+                if(saved)new AlertDialog.Builder(this).setTitle("修复模块已保存")
+                    .setMessage("文件名："+FramebufferCompat.ARCHIVE+"。先恢复原始显示，在 Magisk / KernelSU 中安装此 ZIP，再手动重启。重启后回到本应用开启 Root 同步，以每侧 1% 检查画面与触摸。")
+                    .setPositiveButton("知道了",null).show();
+                else new AlertDialog.Builder(this).setTitle("模块保存未完成")
+                    .setMessage("请重新选择保存位置。")
+                    .setPositiveButton("重新保存",(d,w)->chooseModuleDestination())
+                    .setNegativeButton("取消",null).show();update();});
+        });
+    }
     void exportRomEvidence() {
         if(!evidenceReady()) return;
         new AlertDialog.Builder(this).setTitle("导出用于定位的系统显示组件")
@@ -231,6 +283,10 @@ public class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
+        if(request==SAVE_FRAMEBUFFER_MODULE) {
+            if(result==RESULT_OK && data!=null && data.getData()!=null)saveFramebufferModule(data.getData());
+            return;
+        }
         if(request!=SAVE_ROM_EVIDENCE)return;
         if(result!=RESULT_OK || data==null || data.getData()==null) {
             deleteEvidence(pendingEvidence);pendingEvidence=null;return;

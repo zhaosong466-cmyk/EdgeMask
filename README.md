@@ -1,8 +1,28 @@
-# EdgeMask · 对称黑边 1.5.1 · 诊断版
+# EdgeMask · 对称黑边 1.6
 
 Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可选 Root 收窄系统布局，并将内容投影到屏幕中央。
 
-**AI 编写声明：源码、说明和 APK 由 ChatGPT / Codex 根据用户需求编写和构建。**
+**AI 编写声明：源码、说明、APK 和修复模块由 ChatGPT / Codex 根据用户需求编写和构建。**
+
+## 1.6：关闭 ROM 覆盖投影的帧缓冲缩放路径
+
+实际 ROM 组件的静态分析找到了与 1.5 读回结果一致的处理路径：`qtiFbScalingOnDisplayChange` 在 framebuffer scaling 启用时接管内置屏幕投影；`qtiSetFrameBufferSizeForScaling` 用逻辑矩形覆盖输出矩形，并根据逻辑尺寸调整输出缓冲。因此 `[53, 0, 1271, 3200]` 被改回 `[0, 0, 1324, 3200]`；开启 GPU 合成不会关闭该路径。分析方法和坐标关系见 [兼容说明](compat/ANALYSIS.md)。
+
+该开关从 `vendor.display.enable_fb_scaling` 读取后缓存在 SurfaceFlinger 初始化对象中。1.6 配套模块在正常开机的早期将这一**内存属性**置为 `false`，使 QTI 覆盖路径不再执行，让原有居中投影保留完整输出缓冲。**需要安装模块并重启一次；仅覆盖安装 APK 或运行中改属性无法清除进程内缓存。** 此后宽度和圆角仍在应用里实时调节，无需逐次重启。
+
+使用方法：
+
+1. 在旧版点击“恢复原始显示并关闭遮罩”，等待恢复完成。
+2. 覆盖安装 [EdgeMask-1.6.apk](apk/EdgeMask-1.6.apk)，与旧版使用相同签名。
+3. 在 Magisk / KernelSU 管理器中从本地安装 [EdgeMask-QTI-Compat-1.0.zip](app/src/main/assets/EdgeMask-QTI-Compat-1.0.zip)。也可在 APK 内点击“修复分辨率修改后被拉伸（Root 模块）”保存同一 ZIP。安装完**手动重启一次**。
+4. 回到应用，检测 Root、打开 Root 同步，先设每侧 1% 并启用。直接检查手机的圆形、两侧边距与触摸，正常再确认；可用“查看模块状态”确认本次开机是否执行。若只启用遮罩，系统布局不会收窄。
+5. 撤回模块：先在应用恢复原始显示，再在 Root 管理器中停用/移除模块并重启。卸载 APK 不会移除模块。
+
+模块没有 `system` 挂载、`system.prop`、晚启动脚本、SELinux 规则或原生注入。安装期间只做库校验；开机脚本使用有时限的 `resetprop -n` 设置一个非持久属性，不重启显示服务，不操作面板或 WM。每次开机核对已分析显示库的 SHA-256，OTA 改变实现时会跳过；如果显示服务已经启动也跳过，记录原因。校验针对组件实现，APK 没有机型禁用名单。停用后正常重启由 ROM 加载原属性值。
+
+新增模块脚本场景和生产 Bridge 模拟回归：复现 QTI 覆盖导致失败，关闭该路径后验证原始输出缓冲与居中投影，GPU 兼容勾选开/关均可使用普通居中路径。**静态分析和模拟检查支持这一修复方向，尚未连接手机验证开机时序、实际面板和触摸。不能保证所有显示模式、视频内容或 ROM 均正常。** 模块长期关闭厂商帧缓冲缩放，可能影响系统自己的分辨率切换或功耗；如有异常恢复原始显示并停用模块重启。原有倒计时、独立 watchdog、旋转恢复、心跳及输入/输出校验全部保留。
+
+导出的 ROM 二进制、完整构建指纹和用户诊断不会加入仓库。
 
 ## 1.5.1：取得 ROM 显示组件，继续定位投影不生效
 
@@ -63,7 +83,7 @@ Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可
 
 ## 下载与使用
 
-先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.5.1.apk](apk/EdgeMask-1.5.1.apk)。与 1.0–1.5 使用相同签名。针对当前投影不生效的问题，请按前面的导出步骤取得组件；以下是现有遮罩和实验 Root 功能的操作方法。
+先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.6.apk](apk/EdgeMask-1.6.apk)。与旧版使用相同签名。当前反馈 ROM 的拉伸修复需按 1.6 步骤安装兼容模块并重启；以下是遮罩和 Root 功能的操作方法。
 
 1. 选择无障碍遮罩或普通悬浮窗，授予相应权限。
 2. 点击“检测并申请 Root 权限”，开启 Root 同步；保留“GPU 合成兼容模式”勾选。
@@ -99,7 +119,7 @@ Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可
 - 恢复最多尝试三次；未验证成功保留备份，避免新会话覆盖恢复信息。
 - 更新、开机及应用启动时尝试恢复，不自动重新应用 Root 收窄。
 
-Root 输出适配不能保证所有 ROM 无显示或触摸异常。不要在恢复确认前清除应用数据、卸载或撤销 Root；这些操作可能移除或阻止恢复。未改 DPI、刷新率、面板驱动、厂商属性、系统分区、SELinux 或开机脚本。
+Root 输出适配不能保证所有 ROM 无显示或触摸异常。不要在恢复确认前清除应用数据、卸载或撤销 Root；这些操作可能移除或阻止恢复。APK 未改 DPI、刷新率、面板驱动、系统分区或 SELinux。可选兼容模块有单独的开机脚本，只在已分析实现上覆盖一个内存中的厂商缩放属性。
 
 ### 备用恢复
 
@@ -116,7 +136,9 @@ wm scaling auto
 
 ## 构建与验证
 
-已用 Android SDK 35、Java 17 编译。1.5 验证包括 53 项原有参数/映射/诊断检查、30 项输出几何回归、100 项补偿检查（含 44 个方向/宽度场景）。新增 7 个实际 `CompositorBridge` 主程序的 JVM 模拟场景，验证缓冲请求生效/被忽略、部分尺寸修改后失败、投影修改后失败、原 GPU 已开启、旋转恢复、缓冲恢复失败仍恢复投影及后续重试。
+已用 Android SDK 35、Java 17 编译并用原发行证书签名。1.6 通过 12 个模块安装/启动/退出场景及 10 个生产 Bridge 的 JVM 模拟场景；原有 53、30、100、42 项纯逻辑检查和 24、10 个监控脚本场景也通过。以下测试均不代表真机验证。
+
+1.5 验证包括 53 项原有参数/映射/诊断检查、30 项输出几何回归、100 项补偿检查（含 44 个方向/宽度场景）。1.5 新增 7 个实际 `CompositorBridge` 主程序的 JVM 模拟场景，验证缓冲请求生效/被忽略、部分尺寸修改后失败、投影修改后失败、原 GPU 已开启、旋转恢复、缓冲恢复失败仍恢复投影及后续重试。
 
 另运行 24 个原有回退和 10 个合成层回退黑盒场景。黑盒测试运行实际生成的监控脚本，用模拟 WM、dumpsys 和合成接口检查顺序与恢复；不会执行真正的 Root 操作。Bridge 测试仅替换临时副本中的 dumpsys 可执行路径，Android 接口由 JVM 测试替身实现。这些测试不覆盖真实 Binder、触摸硬件或物理面板效果。
 
@@ -139,9 +161,13 @@ java -cp build/safety com.edges.mask.CompositorPlanChecks
 python3 tests/watchdog_checks.py build/safety
 python3 tests/compositor_guard_checks.py build/safety
 python3 tests/compositor_bridge_checks.py
+python3 compat/build_module.py
+python3 tests/framebuffer_module_checks.py
 # 只读 ROM 导出检查
 javac -d build/safety app/src/main/java/com/edges/mask/RootShell.java app/src/main/java/com/edges/mask/RomEvidence.java tests/RomEvidenceChecks.java
 java -cp build/safety com.edges.mask.RomEvidenceChecks
 ```
+
+模块机制依据：[Magisk 开发指南](https://topjohnwu.github.io/Magisk/guides.html)与 [KernelSU 模块指南](https://kernelsu.org/guide/module.html)。
 
 实现依据：[AOSP SurfaceControl](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/view/SurfaceControl.java)、[DisplayControl](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/DisplayControl.java)、[SurfaceFlinger](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/SurfaceFlinger.cpp)、[Output](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/CompositionEngine/src/Output.cpp)、[LogicalDisplay](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/LogicalDisplay.java)。Root 类加载方式参考 [scrcpy 的 DisplayControl 封装](https://github.com/Genymobile/scrcpy/blob/master/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayControl.java)。GPU 兼容路径仅使用 AOSP 已定义的 1010 查询和 1008 设置协议，先验证接口描述符、完整回复格式并备份原值，不猜测厂商私有命令。
