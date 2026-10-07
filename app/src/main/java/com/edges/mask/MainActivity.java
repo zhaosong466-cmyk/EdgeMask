@@ -19,6 +19,7 @@ public class MainActivity extends Activity {
     SeekBar width, radius;
     Switch rootSwitch;
     Button keepButton;
+    Button stretchButton;
     boolean updatingSwitch, busy;
     final Handler ui = new Handler(Looper.getMainLooper());
     final ExecutorService tasks = Executors.newSingleThreadExecutor();
@@ -53,15 +54,19 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.2", 24);
+        text(header, "对称黑边 1.3", 24);
         status = text(header, "", 12); status.setMaxLines(2);
         rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);
         scroll.setClipToPadding(true); scroll.addView(root);
         screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         footer = new LinearLayout(this); footer.setOrientation(1); screen.addView(footer);
-        keepButton = button(footer, "确认并保留当前分辨率", () -> {
-            RootSyncService s = RootSyncService.instance; if (s != null) s.confirm(); update();
+        keepButton = button(footer, "检查手机画面并确认", this::confirmPhysicalDisplay);
+        stretchButton = button(footer, "画面被拉伸：恢复并保留黑边", () -> {
+            Config.reportStretch(this);
+            RootSyncService s = RootSyncService.instance;
+            if (s != null) s.fallback("你反馈实际画面被拉伸");
+            update();
         });
         button(footer, "恢复原始显示并关闭遮罩", this::restoreDisplay);
         screen.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -97,6 +102,10 @@ public class MainActivity extends Activity {
         root.addView(rootSwitch); rootSwitch.setChecked(Config.rootWanted(this));
         rootSwitch.setOnCheckedChangeListener((view, checked) -> {
             if (updatingSwitch) return;
+            if (checked && !Config.rootRestriction(this).isEmpty()) {
+                updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
+                toast(Config.rootRestriction(this)); return;
+            }
             if (checked && (!RootController.available || RootController.recovering || busy)) {
                 updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
                 toast("请先点击检测并申请 Root 权限"); return;
@@ -108,7 +117,8 @@ public class MainActivity extends Activity {
             Config.stop(this); Config.prefs(this).edit().putBoolean("rootWanted", checked).apply(); update();
         });
         button("检测并申请 Root 权限", this::requestRoot);
-        text("Root：收窄逻辑尺寸并关闭自动缩放，校验画面确实居中后才保留。若系统仍拉伸或无法校验，会恢复尺寸与缩放，继续普通黑边。圆角由遮罩绘制。每侧最多 15%，可见短边至少 320 dp；DPI 不变。每次改动需在 15 秒内确认，否则恢复。需验证你的 ROM 是否兼容。", 13);
+        text("Root：系统报告的映射不能证明实际面板没有拉伸。小米 13 Ultra / Android 16 及以上暂时停用 Root 收窄，普通黑边与圆角照常可调。其他机型每次改动需直接检查手机画面，在 15 秒内确认；失败时恢复尺寸与缩放。每侧最多 15%，短边至少 320 dp；DPI 不变。", 13);
+        button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
         button("启用 / 应用当前设置", this::startMask);
@@ -134,6 +144,41 @@ public class MainActivity extends Activity {
                 | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
             getWindow().getInsetsController().setSystemBarsAppearance(flags, flags);
         }
+    }
+    void confirmPhysicalDisplay() {
+        RootSyncService session = RootSyncService.instance;
+        if (session == null || !session.canConfirm()) return;
+        LinearLayout body = new LinearLayout(this); body.setOrientation(1); body.setPadding(dp(20), dp(8), dp(20), dp(8));
+        text(body, "请直接看手机屏幕：圆形是否是正圆，方框是否是正方形，触摸是否准确？截图比例正常不能证明实际显示正常。", 15);
+        body.addView(new RatioPattern(this), new LinearLayout.LayoutParams(-1, dp(150)));
+        new AlertDialog.Builder(this).setTitle("检查真实画面比例")
+            .setView(body).setPositiveButton("画面与触摸正常", (d, which) -> {
+                if (RootSyncService.instance == session && session.canConfirm()) session.confirm();
+                else toast("预览已结束，请重新启用");
+                update();
+            }).setNegativeButton("被拉伸 / 恢复", (d, which) -> {
+                Config.reportStretch(this);
+                if (RootSyncService.instance == session) session.fallback("你反馈实际画面被拉伸");
+                update();
+            }).show();
+    }
+    void copyDisplayDiagnostics() {
+        if (busy || RootController.recovering) { toast("正在处理，请稍后"); return; }
+        busy = true; update(); toast("正在读取显示参数；可能出现 Root 授权窗口");
+        tasks.execute(() -> {
+            String report = RootDiagnostics.collect(this);
+            ui.post(() -> {
+                busy = false;
+                if (isDestroyed()) return;
+                new AlertDialog.Builder(this).setTitle("只读显示诊断")
+                    .setMessage("仅包含机型、系统版本、显示尺寸及映射。未修改系统设置，也不会自动发送。复制后可以粘贴给我分析。")
+                    .setPositiveButton("复制", (d, which) -> {
+                        ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("EdgeMask 显示诊断", report));
+                        toast("显示诊断已复制");
+                    }).setNegativeButton("取消", null).show();
+                update();
+            });
+        });
     }
     void showRecoveryHelp() {
         String command = "wm size reset; wm scaling auto";
@@ -193,6 +238,8 @@ public class MainActivity extends Activity {
         });
     }
     void startMask() {
+        if (Config.rootWanted(this) && !Config.rootRestriction(this).isEmpty())
+            Config.prefs(this).edit().putBoolean("rootWanted", false).apply();
         RootSyncService session = RootSyncService.instance;
         if (busy || RootController.recovering || (session != null && session.stopping)
                 || (session == null && RootController.hasBackup(this))) { toast("原始显示正在恢复，确认恢复后再启用"); return; }
@@ -242,14 +289,18 @@ public class MainActivity extends Activity {
         if (session != null && session.active) extra = session.pending
             ? "\n请确认显示及触摸正常；" + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒后自动恢复"
             : "\n已确认；服务停止或心跳丢失时恢复原始显示";
-        if (rootStatus != null) rootStatus.setText(RootController.message + extra);
+        String restriction = Config.rootRestriction(this);
+        if (rootStatus != null) rootStatus.setText((restriction.isEmpty() ? RootController.message
+            : restriction + (RootController.recovering || RootController.hasBackup(this) ? "\n" + RootController.message : "")) + extra);
         if (keepButton != null) {
             boolean show = session != null && session.pending && !session.stopping;
             boolean canConfirm = session != null && session.canConfirm();
             keepButton.setVisibility(show ? View.VISIBLE : View.GONE); keepButton.setEnabled(canConfirm);
-            keepButton.setText(canConfirm ? "确认并保留 · "
+            keepButton.setText(canConfirm ? "检查手机画面并确认 · "
                 + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒" : "正在应用分辨率…");
         }
+        if (stretchButton != null) stretchButton.setVisibility(session != null && session.active && !session.stopping ? View.VISIBLE : View.GONE);
+        if (rootSwitch != null) rootSwitch.setEnabled(restriction.isEmpty());
         if (rootSwitch != null && rootSwitch.isChecked() != Config.rootWanted(this)) {
             updatingSwitch = true; rootSwitch.setChecked(Config.rootWanted(this)); updatingSwitch = false;
         }
@@ -272,6 +323,19 @@ public class MainActivity extends Activity {
             paint.setColor(Color.rgb(133, 182, 240)); c.drawRoundRect(b, 0, w - b, h, r, r, paint);
             paint.setColor(Color.WHITE); paint.setTextSize(dp(17)); paint.setTextAlign(Paint.Align.CENTER);
             c.drawText("可见区域预览", w / 2, h / 2, paint);
+        }
+    }
+    final class RatioPattern extends View {
+        final Paint paint = new Paint(3);
+        RatioPattern(Context c) { super(c); }
+        @Override protected void onDraw(Canvas canvas) {
+            float size = Math.min(getHeight() - dp(20), getWidth() / 2f - dp(20));
+            if (size <= 0) return;
+            float x = getWidth() / 4f, y = getHeight() / 2f, r = size / 2;
+            paint.setColor(Color.rgb(0, 137, 123)); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(3));
+            canvas.drawCircle(x, y, r, paint);
+            x = getWidth() * 3 / 4f;
+            canvas.drawRect(x - r, y - r, x + r, y + r, paint);
         }
     }
 }

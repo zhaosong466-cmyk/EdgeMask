@@ -12,7 +12,7 @@ import java.util.concurrent.Executors;
 /** A session is deliberately not restarted by Android. Root settings are never reapplied at boot. */
 public class RootSyncService extends Service implements DisplayManager.DisplayListener {
     static volatile RootSyncService instance;
-    volatile boolean active, armed, verified, pending, stopping, projectionVerified;
+    volatile boolean active, armed, verified, pending, stopping, projectionVerified, physicalConfirmed;
     private volatile boolean checkingProjection;
     private long lastProjectionCheck;
     volatile long previewDeadline;
@@ -91,11 +91,13 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
     }
     void schedule() {
         if (!wanted()) return;
-        generation++; ui.removeCallbacks(applyTask); ui.postDelayed(applyTask, 450);
+        generation++;
+        ui.removeCallbacks(applyTask); ui.postDelayed(applyTask, 450);
     }
     private void apply(int request) {
         if (!wanted() || request != generation) return;
         try {
+            if (!Config.rootRestriction(this).isEmpty()) throw new Exception(Config.rootRestriction(this));
             int percent = Config.prefs(this).getInt("width", 4);
             if (original == null) {
                 if (!RootController.available || RootController.recovering) throw new Exception("请先检测并授予 Root 权限");
@@ -123,7 +125,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             if (SystemClock.elapsedRealtime() / 1000 >= previewDeadline) throw new Exception("预览已超时");
             if (!RootController.read(RootController.file(this, "state")).isEmpty()) throw new Exception("回退已开始，拒绝修改");
             // Configuration callbacks may run while wm is updating the logical display.
-            active = true; verified = false; projectionVerified = false;
+            active = true; verified = false; projectionVerified = false; physicalConfirmed = false;
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
             // The watchdog is the only size writer during a session. A delayed su request
             // can never apply a new size after the watchdog has already rolled back.
@@ -144,7 +146,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             if (!wanted() || request != generation) return;
             lastPercent = percent;
             projectionVerified = true; verifiedGeneration = request; verified = true;
-            RootController.message = "已校验居中显示 " + target[0] + "×" + target[1] + "；缩放关闭，DPI " + original.density;
+            RootController.message = "系统参数符合预期 " + target[0] + "×" + target[1] + "；实际画面待你确认";
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
         } catch (Exception e) {
             ui.post(() -> fallback(e.getMessage() == null ? "Root 显示修改失败" : e.getMessage()));
@@ -158,7 +160,9 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             // A lease may never be renewed after the watchdog has started to restore.
             String state = RootController.read(RootController.file(this, "state"));
             if (!state.isEmpty()) { revert("回退已触发，请重新启用"); return; }
-            RootController.lease(this, now + 20); pending = false;
+            RootController.lease(this, now + 20); pending = false; physicalConfirmed = true;
+            RootController.message = "画面与触摸由你确认；系统参数校验不能证明面板输出";
+            Config.refresh(this);
         } catch (Exception e) { revert("无法确认，触发恢复"); }
     }
     boolean canConfirm() { return active && verified && pending && !stopping && verifiedGeneration == generation; }
@@ -171,7 +175,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
     }
     private void finish(String reason, boolean keepMask) {
         if (stopping) return;
-        stopping = true; active = false; verified = false; pending = false; projectionVerified = false; generation++;
+        stopping = true; active = false; verified = false; pending = false; projectionVerified = false; physicalConfirmed = false; generation++;
         ui.removeCallbacksAndMessages(null);
         boolean preserve = keepMask && ((Config.access(this) && MaskAccessibility.instance != null)
             || (!Config.access(this) && android.provider.Settings.canDrawOverlays(this)));

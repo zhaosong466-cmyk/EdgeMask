@@ -95,6 +95,27 @@ public final class SafetyChecks {
             .replace("[72,0,1368,3200]", "[160,0,3040,1440]")
             .replace("[1440,3200]", "[3200,1440]")).requireCentered(nativeDisplay, new int[]{1440,2880}, 1);
         check(true, "validate landscape borders using rotated physical coordinates");
+        check(!RootCompatibility.restriction("ishtar", "2304FPN6DC", 36).isEmpty(),
+                "block the reported Xiaomi 13 Ultra Android 16 combination");
+        check(!RootCompatibility.restriction("", "Xiaomi 13 Ultra", 36).isEmpty(), "match human readable model names");
+        check(!RootCompatibility.restriction("", "2304FPN6DG", 36).isEmpty(), "match global model variant");
+        check(!RootCompatibility.restriction("ishtar", "unknown", 37).isEmpty(), "do not assume an untested newer OS fixed output");
+        check(RootCompatibility.restriction("ishtar", "2304FPN6DC", 35).isEmpty(), "do not generalize the report to earlier Android versions");
+        check(RootCompatibility.restriction("other", "other", 36).isEmpty(), "do not block unrelated devices");
+        check(RootCompatibility.restriction(null, null, 36).isEmpty(), "missing names do not crash compatibility check");
+        String diagnostic = DiagnosticGeometry.filter("  mCurrentDisplayRect=Rect(43, 0 - 1397, 3200)\n"
+            + "  layerStackSpace=ProjectionSpace{bounds=Rect(0, 0 - 1354, 3200), content=Rect(0, 0 - 1354, 3200), orientation=ROTATION_0}\n"
+            + "  mDisplayScalingDisabled=true\n"
+            + "Layer com.private.bank secret-message\n"
+            + "  layerStackSpace=com.private.bank-secret\n"
+            + "Window title: layerStackSpace=Rect(0, 0 - 1, 2)\n");
+        check(diagnostic.contains("mCurrentDisplayRect") && diagnostic.contains("ProjectionSpace")
+            && diagnostic.contains("mDisplayScalingDisabled = true"), "retain numeric display geometry");
+        check(!diagnostic.contains("private") && !diagnostic.contains("secret") && !diagnostic.contains("Window"),
+                "never export names, screen text, or unknown geometry values");
+        rejects(() -> DiagnosticGeometry.command("SurfaceFlinger; wm size reset"), "diagnostic services cannot inject shell commands");
+        check(!DiagnosticGeometry.command("display").contains("wm ")
+            && !DiagnosticGeometry.command("SurfaceFlinger").contains("service call"), "diagnostics are read only");
         System.out.println("PASS: " + checks + " profile and rollback-policy checks");
     }
 }

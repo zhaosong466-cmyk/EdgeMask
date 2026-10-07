@@ -56,7 +56,9 @@ final class RootController {
         RootShell.run("command -v nohup >/dev/null", 5).checked();
         DisplayProfile p = query(); p.validateNoScaleBaseline();
         grantedProfile = p;
-        available = true; message = "Root 已授权；原始 " + p.width + "×" + p.height + "，DPI " + p.density;
+        available = true; message = Config.rootRestriction(c).isEmpty()
+            ? "Root 已授权；原始 " + p.width + "×" + p.height + "，DPI " + p.density
+            : "Root 已授权，可恢复与诊断；" + Config.rootRestriction(c);
         return p;
     }
 
@@ -82,6 +84,7 @@ final class RootController {
     }
 
     static synchronized void arm(Context c, DisplayProfile p, long expirySeconds) throws Exception {
+        if (!Config.rootRestriction(c).isEmpty()) throw new IOException(Config.rootRestriction(c));
         DisplayScaling.argument(p.scalingMode);
         if (hasBackup(c)) throw new IOException("旧会话尚未恢复，拒绝启动新的回退进程");
         for (String s : new String[]{"stop", "ready", "state", "pid"}) {

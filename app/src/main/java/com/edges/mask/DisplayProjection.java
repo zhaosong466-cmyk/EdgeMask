@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Checks the display/touch viewport actually published by Android's input service. */
+/** Validates the reported input viewport; it cannot prove the final panel output. */
 final class DisplayProjection {
     final int rotation, deviceWidth, deviceHeight;
     final int[] logical, physical;
@@ -61,9 +61,9 @@ final class DisplayProjection {
         int[] desired = {left, top, left + w, top + h};
         if (rotation != expectedRotation || deviceWidth != pw || deviceHeight != ph
                 || !Arrays.equals(logical, new int[]{0, 0, w, h}))
-            throw new IllegalArgumentException("实际屏幕映射与目标尺寸不同");
+            throw new IllegalArgumentException("系统报告的屏幕映射与目标尺寸不同");
         for (int i = 0; i < 4; i++) if (physical[i] < 0 || physical[i] > (i % 2 == 0 ? pw : ph)
                 || Math.abs(physical[i] - desired[i]) > 1)
-            throw new IllegalArgumentException("系统仍在拉伸或偏移画面，不能保留 Root 修改");
+            throw new IllegalArgumentException("报告的映射仍包含缩放或偏移，不能保留 Root 修改");
     }
 }

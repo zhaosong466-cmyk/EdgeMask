@@ -1,103 +1,95 @@
-# EdgeMask · 对称黑边 1.2
+# EdgeMask · 对称黑边 1.3
 
-一个轻量 Android 屏幕遮罩工具：左右对称黑条、可调圆角，以及可选的 **Root 系统显示同步**。
+Android 屏幕遮罩工具：左右对称黑条、手动调节宽度和内边框圆角；兼容设备可选 Root 收窄逻辑显示尺寸。
 
-**AI 编写声明：源码、项目说明与 APK 由 ChatGPT / Codex 根据用户需求生成。Root 功能为实验功能，未完成系统性的真机兼容测试；不能保证所有 Android 版本、Root 管理器和厂商 ROM 均稳定。**
+**AI 编写声明：源码、说明和 APK 由 ChatGPT / Codex 根据用户需求生成。Root 是实验功能，未完成系统性真机兼容测试。**
 
-## 1.2 修复
+## 1.3：修正对实际显示的误判
 
-- 针对“修改分辨率后被系统拉伸到全屏，黑边消失”：修改逻辑尺寸时同时执行 `wm scaling off`，关闭自动缩放。
-- 不再仅凭 `wm size` 的返回值判断成功。修改前先验证主显示器映射可读取；修改后读取当前缩放状态和实际显示/触摸映射，验证逻辑画面以原像素尺寸居中，左右保留预期宽度的黑边。
-- 只有上述校验通过才停止绘制额外侧边黑条。命令失败、ROM 忽略缩放设置、映射仍全屏或无法验证时，恢复原始尺寸与缩放，自动退回普通黑边。
-- 备份、独立回退进程和备用恢复方法都包含原始缩放设置。确认后每约 5 秒复查映射，检测到再次拉伸会恢复并退回普通黑边。
-- 处理 Android 15 及以上的系统栏边距，滚动内容被限制在状态栏与导航栏之间，缩窄时重新读取边距。
-- 浅色页面使用深色系统栏图标，避免状态栏白字与页面文字叠在一起。
-- 确认按钮和恢复按钮固定在底部，调整参数时无需滚回页面顶部；确认按钮显示剩余秒数，应用尺寸完成并校验后才允许确认。
-- Root 滑块的最大值由原始尺寸、DPI 和旋转方向计算。除了每侧 15% 上限，还提前限制到剩余短边至少 320 dp；例如 1440×3200、DPI 560 的竖屏上限为每侧 11%。
-- 此次修复依据 1.1 的用户录屏与源代码检查；1.2 尚未在该手机上验证。
+小米 13 Ultra、Android 16 的用户反馈：1.2 显示“已校验居中”，截图比例正常，但手机实际画面仍被横向拉伸。1.2 检查的是 WindowManager 状态和输入服务报告的映射，**这些数值不能证明最终面板输出没有缩放**。此前停用侧边遮罩的判断不足。
+
+- 暂时限制小米 13 Ultra（设备代号 `ishtar` / 对应型号）在 Android 16 及以上使用 Root 收窄，避免重复已反馈的拉伸。普通黑边和圆角继续可用。这是根据用户反馈采取的保守限制，不代表每个系统版本都已测试。
+- Root UI 不再声称“已验证实际居中”。其他设备在预览期间仍绘制侧边遮罩，用户直接检查手机上的圆形、正方形和触摸后才能确认。
+- 增加“画面被拉伸：恢复并保留黑边”。反馈会恢复原始尺寸与缩放，并限制当前系统构建继续使用 Root 收窄。
+- 增加“复制显示诊断（只读，需要 Root）”：读取机型、系统构建、逻辑/物理尺寸、DPI、缩放、输入映射和可用的显示几何参数。诊断不修改设置，不截图，不导出窗口/应用层名称，也不会自动上传。
+- 仍保留独立回退进程、15 秒预览、原始尺寸与缩放备份、手动恢复及重启/更新恢复。
+
+**此版尚未实现该小米 ROM 的无拉伸 Root 收窄。需要具体系统构建与显示诊断后继续适配；不会通过猜测驱动设置或修改系统分区来宣称修复。**
 
 ## 下载与使用
 
-先确认旧版已恢复原始显示，再安装 [EdgeMask-1.2.apk](apk/EdgeMask-1.2.apk)，Android 8.0 及以上。与此前的 1.0 / 1.1 使用相同签名，可覆盖更新。
+先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.3.apk](apk/EdgeMask-1.3.apk)。Android 8.0 及以上，与 1.0–1.2 使用相同签名。
 
-1. 授予无障碍服务或“在其他应用上层显示”权限，选择对应显示方式。
-2. 普通模式直接点击“启用 / 应用当前设置”，调节宽度和圆角。
-3. 如需系统重新排版，点击“检测并申请 Root 权限”，在 Root 管理器中手动允许。
-4. 打开“Root 同步系统显示”开关，首次建议每侧 **1%**，再点击启用。
-5. 每次显示尺寸改变后，检查画面、键盘及触摸是否正常，在 **15 秒内点击确认并保留**；不确认会自动回退。
-6. 停止使用时点击页面底部“恢复原始显示并关闭遮罩”，确认恢复成功后再卸载或撤销 Root。
+1. 授予本应用无障碍服务，或“在其他应用上层显示”权限。
+2. 选择显示方式，调节每侧黑条宽度和圆角，点击“启用 / 应用当前设置”。
+3. 小米 13 Ultra / Android 16：使用普通模式；若要排查 Root 输出问题，点击复制显示诊断，按需手动提供结果。
+4. 其他机型可申请 Root，再开启 Root 同步。首次建议每侧 1%。每次变更后直接看手机，确认比例和触摸正常；15 秒内未确认会恢复。
+5. 使用结束时点击底部恢复按钮，确认恢复成功后再卸载或撤销 Root。
 
-## 功能
+## 功能与权限
 
-- 普通遮罩每侧宽度 0–25%，左右同步；圆角半径 0–160 dp。
-- 滑块实时调整，±1 微调；宽度改变在 Root 模式下合并为约 450 ms 一次，避免每个拖动事件都重配置系统。
-- 普通模式只遮住内容，不修改布局；Root 模式修改默认显示器的 **逻辑显示尺寸**，使应用重新排版，DPI 不修改。
-- Root 模式关闭自动缩放，并在校验居中显示后由系统显示投影产生两侧留黑；此时只保留圆角遮罩，避免重复遮挡。校验失败则保留普通侧边遮罩并恢复系统设置。
-- 默认不使用 Root，没有 Root 也可使用全部原有遮罩功能。
-- 原生 Java，无第三方运行时依赖、无网络权限。
+- 普通黑条每侧 0–25%，左右同步；内边框圆角 0–160 dp。
+- 滑块实时调整，±1 微调；Root 宽度更新合并为约 450 ms 一次。
+- 普通模式遮挡内容，不重排应用、不修改系统显示尺寸。
+- Root 模式使用 `wm size` 与 `wm scaling off`，DPI 不变；圆角仍由遮罩绘制。系统报告检查和人工确认是不同步骤。
+- Root 每侧最多 15%，可见短边至少 320 dp。上限依据原始尺寸、DPI、方向计算；例如 1440×3200、DPI 560 的竖屏为每侧 11%。
+- 只支持主用户、主显示器和当前逻辑尺寸等于物理尺寸的 Root 基线；已有较低分辨率时使用普通遮罩。
+- 原生 Java，无第三方运行时依赖，无网络权限；默认关闭 Root。
 
 | 显示方式 | 权限 | 行为 |
 | --- | --- | --- |
-| 无障碍遮罩 | 开启本应用无障碍服务 | 触摸穿透；不读取窗口内容、不订阅事件、不执行手势 |
+| 无障碍遮罩 | 本应用无障碍服务 | 触摸穿透；不读取窗口文字、不订阅事件、不执行手势 |
 | 普通悬浮窗 | 在其他应用上层显示 | 黑条和圆角方块内拦截触摸；中央正常操作 |
-| Root 同步（附加选项） | Root + 上述任一种遮罩权限 | 系统按目标区域重新排版，仍由遮罩绘制圆角 |
+| Root 同步 | Root + 任一种遮罩权限 | 收窄逻辑尺寸；需要兼容检查及人工观察，部分设备被限制 |
+| 只读诊断 | Root | 读取显示参数，用户选择是否复制；不启用 Root 收窄 |
 
-## Root 回退保护
+## Root 回退与实际限制
 
-- 修改前备份原始逻辑尺寸、尺寸覆盖状态和原始缩放模式（`auto` / `off`）。无法读取缩放状态时拒绝修改。
-- 已有尺寸覆盖会恢复为原来的 `WxH`；原先没有尺寸覆盖才执行 `wm size reset`。
-- 缩放恢复为原来的 `auto` 或 `off`，不能一律重置为 `auto`。兼容恢复 1.1 的旧尺寸备份；旧版未修改缩放，因此恢复旧备份时不额外修改缩放。
-- 先验证独立回退进程已经运行，再执行尺寸变更；回退进程启动失败时不修改显示。
-- 会话中的尺寸、缩放修改与恢复由同一个独立进程串行执行，避免延迟的修改命令在恢复之后再次生效。尺寸恢复失败时仍尝试恢复缩放。
-- 每次变更必须重新确认。拖动期间不会无限延长同一次 15 秒预览期限。
-- 确认后由前台服务续约；应用进程被终止或心跳丢失时，独立回退进程在正常调度下约 20 秒内尝试恢复。
-- 手动关闭、移除应用任务、撤销遮罩权限、旋转屏幕或监控错误时请求恢复。
-- 恢复操作会重读系统尺寸和缩放进行校验；失败时保留恢复记录并拒绝新的 Root 会话。
-- 原始备份放在设备保护存储；开机、应用更新及新进程启动时尝试恢复遗留会话，**不会开机自动重新应用修改**。
-- Root 每侧上限 15%，剩余短边至少 320 dp；暂只支持主用户、主显示器，以及当前逻辑尺寸等于物理尺寸的情况。已有较低分辨率时使用普通遮罩，不自动覆盖你的原有设置。
-- 只使用 Android 的 `wm size` 和 `wm scaling`，不修改面板驱动、刷新率、DPI、系统分区或开机脚本。
+修改前备份原始逻辑尺寸、尺寸覆盖状态和缩放模式（`auto` / `off`）。缩放状态无法读取时拒绝修改。原来没有覆盖时使用 `wm size reset`；已有覆盖则恢复原来的 `WxH`。缩放按备份恢复，不能一律改为 `auto`。1.1 旧备份只恢复尺寸，因为旧版未修改缩放。
 
-## 实际限制
+独立回退进程先启动，再串行执行会话中的尺寸、缩放变更和恢复。尺寸恢复失败时仍尝试恢复缩放。每次变更必须确认；拖动不无限延长同一次 15 秒预览。确认后前台服务续约，进程失联时在正常调度下约 20 秒内尝试恢复；约每 5 秒复查系统报告的映射，不能据此保证厂商最终输出状态。
 
-这些措施降低显示异常后难以恢复的风险，不能构成“不会出现黑屏、触摸错位或系统错误”的保证。校验使用系统报告的映射，仍须用户确认实际画面和触摸。OEM 显示投影、打孔和手势区域处理可能与 AOSP 不同；自动回退依赖系统命令可执行以及进程仍能调度。系统命令卡死时，独立进程也必须等当前命令返回才能串行恢复。重启、Root 授权撤销、ROM 杀死回退进程、系统服务卡死、应用卸载或清除数据均可能阻止回退。开机恢复也可能受 ROM 和 Root 管理器限制。
+手动关闭、任务移除、遮罩权限失效、旋转或监控异常时请求恢复。恢复后重读尺寸和缩放，失败则保留备份、限制新 Root 会话。备份使用设备保护存储；启动、开机和更新时尝试恢复，**不会开机重新应用 Root 修改**。
 
-Root 模式旋转屏幕时会恢复原始尺寸并关闭会话，需要重新启用；普通遮罩仍支持自动横竖屏适配。圆角为视觉遮罩，不改变系统窗口的实际圆角形状。
+这些保护不能保证所有 ROM 无黑屏或触摸错误。回退依赖系统命令、Root 授权和进程调度；命令卡死时必须等当前命令返回后串行恢复。卸载、清除数据、撤销 Root、ROM 杀进程或系统服务卡死可能阻止恢复。截图正常也不能证明手机实际比例正常。
+
+不修改 DPI、面板驱动、刷新率、系统分区、厂商属性或开机脚本。圆角是视觉遮罩，不改变系统窗口形状。Root 旋转时恢复并结束会话，普通遮罩支持横竖屏。
 
 ## 备用恢复
 
-优先等待自动回退，或使用应用底部按钮 / Root 前台通知中的“恢复原始显示”。如果无法操作界面，可通过此前已经启用并授权的 ADB 执行：
+优先使用底部按钮或 Root 通知中的恢复操作。应用内“查看备用恢复方法”根据当前备份生成命令。对于原先使用默认尺寸、自动缩放的手机，可从此前已授权的 ADB 执行：
 
 ```bash
 adb shell su -c 'wm size reset; wm scaling auto'
 ```
 
-上述命令适用于原先使用默认尺寸、自动缩放的手机。若原来已有自定义尺寸或关闭了缩放，必须使用此前的 `WxH` 和原始缩放模式。例如：
+原先已有修改时使用原来的 `WxH` 和缩放模式。例如原始设置为 1080×2400、缩放关闭：
 
 ```bash
 adb shell su -c 'wm size 1080x2400; wm scaling off'
 ```
 
-应用内“查看备用恢复方法”会根据当前备份生成对应命令。不要在未确认恢复时卸载应用、清除数据或撤销 Root。此应用不修改 DPI，不需要重置密度。
+DPI 未修改，无需重置密度。恢复确认前不要卸载、清除数据或撤销 Root。
 
 ## 验证与构建
 
-已通过 Android SDK 35 编译、APK 签名校验、49 项参数、映射和回退规则检查，以及 24 个独立修改与回退进程的模拟黑盒场景。测试直接覆盖居中映射成功、被拉伸成全屏的拒绝、映射偏移和矛盾、缩放命令失败或被忽略、原始 `off` 模式恢复、缩放恢复失败、无法读取缩放状态，以及此前的超时、续约、尺寸恢复和非法输入场景。测试使用模拟 `wm` / `dumpsys`，不能代替真机兼容性验证。
+通过 SDK 35 编译、APK 签名检查、60 项参数/映射/兼容限制/诊断过滤检查，以及 24 个独立修改与回退进程的模拟黑盒场景。模拟测试不能代替真机验证。1.2 的上述用户反馈证明，软件映射检查不能验证最终面板比例。
 
-用 Android Studio 打开项目，或使用 JDK 17、Gradle 8.9、Android SDK Platform 35：
+Android Studio 或 JDK 17、Gradle 8.9、Android SDK Platform 35：
 
 ```bash
 gradle :app:assembleDebug
 ```
 
-输出 `app/build/outputs/apk/debug/app-debug.apk`。自己重新构建的 APK 签名可能不同，无法直接覆盖这里的安装包。签名密钥不包含在仓库中。
+输出 `app/build/outputs/apk/debug/app-debug.apk`。自行构建的签名可能不同；发行签名密钥不在仓库。
 
 纯 Java 与模拟回退测试：
 
 ```bash
 mkdir -p build/safety
-javac -d build/safety app/src/main/java/com/edges/mask/DisplayProfile.java app/src/main/java/com/edges/mask/DisplayScaling.java app/src/main/java/com/edges/mask/DisplayProjection.java app/src/main/java/com/edges/mask/RootShell.java app/src/main/java/com/edges/mask/GuardScript.java tests/SafetyChecks.java
+javac -d build/safety app/src/main/java/com/edges/mask/DisplayProfile.java app/src/main/java/com/edges/mask/DisplayScaling.java app/src/main/java/com/edges/mask/DisplayProjection.java app/src/main/java/com/edges/mask/RootCompatibility.java app/src/main/java/com/edges/mask/DiagnosticGeometry.java app/src/main/java/com/edges/mask/RootShell.java app/src/main/java/com/edges/mask/GuardScript.java tests/SafetyChecks.java
 java -cp build/safety com.edges.mask.SafetyChecks
 python3 tests/watchdog_checks.py build/safety
 ```
 
-实现依据：Android AOSP 的 [WindowManagerShellCommand](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/wm/WindowManagerShellCommand.java)、[DisplayContent](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/wm/DisplayContent.java)、[LogicalDisplay](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/LogicalDisplay.java)、[DisplayViewport](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/hardware/display/DisplayViewport.java) 与 Android 官方的 [系统栏适配说明](https://developer.android.com/develop/ui/views/layout/edge-to-edge)。厂商 ROM 仍须实际验证。
+实现依据：[AOSP WindowManagerShellCommand](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/wm/WindowManagerShellCommand.java)、[LogicalDisplay](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/LogicalDisplay.java)、[DisplayViewport](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/hardware/display/DisplayViewport.java)。设备代号依据 [MiCode 内核开源列表](https://github.com/MiCode/Xiaomi_Kernel_OpenSource)。这些开源实现不能替代厂商 ROM 的实际输出验证。
