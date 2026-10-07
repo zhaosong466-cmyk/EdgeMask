@@ -14,14 +14,14 @@ public final class SafetyChecks {
         check(thrown, message);
     }
     public static void main(String[] args) throws Exception {
-        if (args.length == 3) {
+        if (args.length == 3 || args.length == 4) {
             DisplayProfile p = args[2].equals("override")
                 ? new DisplayProfile(1440, 3200, 1080, 2400, 420, true, DisplayScaling.AUTO)
                 : new DisplayProfile(1080, 2400, 1080, 2400, 420, false,
                     args[2].equals("off") ? DisplayScaling.OFF : DisplayScaling.AUTO);
             Files.write(Paths.get(args[0], "watchdog.sh"),
                 GuardScript.build(args[0], p, args[1], Paths.get(args[0], "clock").toString(),
-                    Paths.get(args[0], "mock-dumpsys").toString()).getBytes(StandardCharsets.UTF_8));
+                    Paths.get(args[0], "mock-dumpsys").toString(), args.length==4, 0, true).getBytes(StandardCharsets.UTF_8));
             return;
         }
         DisplayProfile p = DisplayProfile.parse("Physical size: 1080x2400\nPhysical density: 420\n");
@@ -95,14 +95,6 @@ public final class SafetyChecks {
             .replace("[72,0,1368,3200]", "[160,0,3040,1440]")
             .replace("[1440,3200]", "[3200,1440]")).requireCentered(nativeDisplay, new int[]{1440,2880}, 1);
         check(true, "validate landscape borders using rotated physical coordinates");
-        check(!RootCompatibility.restriction("ishtar", "2304FPN6DC", 36).isEmpty(),
-                "block the reported Xiaomi 13 Ultra Android 16 combination");
-        check(!RootCompatibility.restriction("", "Xiaomi 13 Ultra", 36).isEmpty(), "match human readable model names");
-        check(!RootCompatibility.restriction("", "2304FPN6DG", 36).isEmpty(), "match global model variant");
-        check(!RootCompatibility.restriction("ishtar", "unknown", 37).isEmpty(), "do not assume an untested newer OS fixed output");
-        check(RootCompatibility.restriction("ishtar", "2304FPN6DC", 35).isEmpty(), "do not generalize the report to earlier Android versions");
-        check(RootCompatibility.restriction("other", "other", 36).isEmpty(), "do not block unrelated devices");
-        check(RootCompatibility.restriction(null, null, 36).isEmpty(), "missing names do not crash compatibility check");
         String diagnostic = DiagnosticGeometry.filter("  mCurrentDisplayRect=Rect(43, 0 - 1397, 3200)\n"
             + "  layerStackSpace=ProjectionSpace{bounds=Rect(0, 0 - 1354, 3200), content=Rect(0, 0 - 1354, 3200), orientation=ROTATION_0}\n"
             + "  mDisplayScalingDisabled=true\n"

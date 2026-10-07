@@ -12,7 +12,7 @@ import java.util.concurrent.Executors;
 /** A session is deliberately not restarted by Android. Root settings are never reapplied at boot. */
 public class RootSyncService extends Service implements DisplayManager.DisplayListener {
     static volatile RootSyncService instance;
-    volatile boolean active, armed, verified, pending, stopping, projectionVerified, physicalConfirmed;
+    volatile boolean active, armed, verified, pending, stopping, projectionVerified;
     private volatile boolean checkingProjection;
     private long lastProjectionCheck;
     volatile long previewDeadline;
@@ -43,7 +43,10 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
                     long now = SystemClock.elapsedRealtime() / 1000;
                     if (!state.isEmpty()) {
                         if (pending && now >= previewDeadline) revert("预览超时，已请求恢复原始显示");
-                        else fallback("独立回退进程已触发恢复");
+                        else {
+                            String detail=RootController.read(RootController.file(RootSyncService.this,"error"));
+                            fallback(detail.isEmpty()?"独立回退进程已触发恢复":detail);
+                        }
                         return;
                     }
                     if (pending && now >= previewDeadline) { revert("预览超时，已请求恢复原始分辨率"); return; }
@@ -97,7 +100,6 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
     private void apply(int request) {
         if (!wanted() || request != generation) return;
         try {
-            if (!Config.rootRestriction(this).isEmpty()) throw new Exception(Config.rootRestriction(this));
             int percent = Config.prefs(this).getInt("width", 4);
             if (original == null) {
                 if (!RootController.available || RootController.recovering) throw new Exception("请先检测并授予 Root 权限");
@@ -113,19 +115,19 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             }
             if (percent == 0) { ui.post(() -> revert("宽度为零，恢复原始显示")); return; }
             if (!armed) {
-                previewDeadline = SystemClock.elapsedRealtime() / 1000 + 15;
+                previewDeadline = SystemClock.elapsedRealtime() / 1000 + 30;
                 pending = true;
-                RootController.arm(this, original, previewDeadline);
+                RootController.arm(this, original, previewDeadline, originalRotation);
                 armed = true;
             } else {
-                if (!pending) { previewDeadline = SystemClock.elapsedRealtime() / 1000 + 15; pending = true; }
+                if (!pending) { previewDeadline = SystemClock.elapsedRealtime() / 1000 + 25; pending = true; }
                 RootController.lease(this, previewDeadline);
             }
             if (!wanted() || request != generation) return;
             if (SystemClock.elapsedRealtime() / 1000 >= previewDeadline) throw new Exception("预览已超时");
             if (!RootController.read(RootController.file(this, "state")).isEmpty()) throw new Exception("回退已开始，拒绝修改");
             // Configuration callbacks may run while wm is updating the logical display.
-            active = true; verified = false; projectionVerified = false; physicalConfirmed = false;
+            active = true; verified = false; projectionVerified = false;
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
             // The watchdog is the only size writer during a session. A delayed su request
             // can never apply a new size after the watchdog has already rolled back.
@@ -146,7 +148,8 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             if (!wanted() || request != generation) return;
             lastPercent = percent;
             projectionVerified = true; verifiedGeneration = request; verified = true;
-            RootController.message = "系统参数符合预期 " + target[0] + "×" + target[1] + "；实际画面待你确认";
+            RootController.message = "已提交合成层居中 " + target[0] + "×" + target[1]
+                + (Config.gpuCompatibility(this)?" + GPU 合成":"") + "；请检查手机实际画面";
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
         } catch (Exception e) {
             ui.post(() -> fallback(e.getMessage() == null ? "Root 显示修改失败" : e.getMessage()));
@@ -160,8 +163,8 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             // A lease may never be renewed after the watchdog has started to restore.
             String state = RootController.read(RootController.file(this, "state"));
             if (!state.isEmpty()) { revert("回退已触发，请重新启用"); return; }
-            RootController.lease(this, now + 20); pending = false; physicalConfirmed = true;
-            RootController.message = "画面与触摸由你确认；系统参数校验不能证明面板输出";
+            RootController.lease(this, now + 20); pending = false;
+            RootController.message = "已保留合成层居中；持续监控输出投影与触摸映射";
             Config.refresh(this);
         } catch (Exception e) { revert("无法确认，触发恢复"); }
     }
@@ -175,7 +178,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
     }
     private void finish(String reason, boolean keepMask) {
         if (stopping) return;
-        stopping = true; active = false; verified = false; pending = false; projectionVerified = false; physicalConfirmed = false; generation++;
+        stopping = true; active = false; verified = false; pending = false; projectionVerified = false; generation++;
         ui.removeCallbacksAndMessages(null);
         boolean preserve = keepMask && ((Config.access(this) && MaskAccessibility.instance != null)
             || (!Config.access(this) && android.provider.Settings.canDrawOverlays(this)));

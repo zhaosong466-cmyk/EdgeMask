@@ -7,12 +7,12 @@ import java.util.Arrays;
 /** Explicit, read-only collection. No mutation, screenshot, network, or automatic upload. */
 final class RootDiagnostics {
     static String collect(Context c) {
-        StringBuilder report = new StringBuilder("EdgeMask 1.3 显示诊断（只读）\n");
+        StringBuilder report = new StringBuilder("EdgeMask 1.4 显示诊断（只读）\n");
         report.append("制造商: ").append(Build.MANUFACTURER)
             .append("\n机型: ").append(Build.MODEL).append("\n设备代号: ").append(Build.DEVICE)
             .append("\nAndroid: ").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT)
             .append("\n系统版本: ").append(Build.DISPLAY).append("\n构建版本: ").append(Build.FINGERPRINT)
-            .append("\nRoot 收窄限制: ").append(Config.rootRestriction(c))
+            .append("\nGPU 合成兼容模式: ").append(Config.gpuCompatibility(c))
             .append("\n遮罩启用: ").append(Config.enabled(c))
             .append("\nRoot 会话: ").append(RootSyncService.instance != null).append('\n');
         try {
@@ -46,7 +46,12 @@ final class RootDiagnostics {
                 if (data.code != 0) report.append("此 ROM 未提供匹配字段或读取失败\n");
             } catch (Exception e) { report.append("读取未完成: ").append(e.getMessage()).append('\n'); }
         }
-        report.append("\n以上系统报告不能证明实际面板无拉伸。未修改显示参数，未读取屏幕内容，未自动发送。\n");
+        report.append("\n[最近一次合成层修正记录，超时后也保留]\n");
+        try { report.append(RootController.read(RootController.file(c,"compositor-report.txt"))).append('\n'); }
+        catch(Exception e) { report.append("暂无修正记录\n"); }
+        try { report.append("修正错误: ").append(RootController.read(RootController.file(c,"error"))).append('\n'); }
+        catch(Exception ignored) { }
+        report.append("\n以上系统报告不能证明实际面板无拉伸。本次诊断未修改显示参数，未截图，未自动发送。\n");
         return report.toString();
     }
 }

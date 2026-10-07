@@ -53,12 +53,10 @@ final class RootController {
         if (!"0".equals(RootShell.run("id -u", 45).checked().trim())) throw new IOException("未获得 Root 权限");
         if (hasBackup(c)) restore(c);
         if (android.os.Process.myUid() / 100000 != 0) throw new IOException("暂只支持手机主用户");
-        RootShell.run("command -v nohup >/dev/null", 5).checked();
+        RootShell.run("command -v nohup >/dev/null && command -v timeout >/dev/null", 5).checked();
         DisplayProfile p = query(); p.validateNoScaleBaseline();
         grantedProfile = p;
-        available = true; message = Config.rootRestriction(c).isEmpty()
-            ? "Root 已授权；原始 " + p.width + "×" + p.height + "，DPI " + p.density
-            : "Root 已授权，可恢复与诊断；" + Config.rootRestriction(c);
+        available = true; message = "Root 已授权；原始 " + p.width + "×" + p.height + "，DPI " + p.density;
         return p;
     }
 
@@ -83,26 +81,32 @@ final class RootController {
             Boolean.parseBoolean(p.getProperty("override")), Integer.parseInt(p.getProperty("scaling", "-1")));
     }
 
-    static synchronized void arm(Context c, DisplayProfile p, long expirySeconds) throws Exception {
-        if (!Config.rootRestriction(c).isEmpty()) throw new IOException(Config.rootRestriction(c));
+    static void helper(Context c) throws IOException {
+        write(file(c, "compositor.sh"), "#!/system/bin/sh\naction=$1; shift\nexport CLASSPATH="
+            + RootShell.quote(c.getApplicationInfo().sourceDir) + "\nexec /system/bin/app_process /system/bin "
+            + "com.edges.mask.CompositorBridge \"$action\" " + RootShell.quote(directory(c).getAbsolutePath()) + " \"$@\"\n");
+    }
+    static synchronized void arm(Context c, DisplayProfile p, long expirySeconds, int rotation) throws Exception {
         DisplayScaling.argument(p.scalingMode);
         if (hasBackup(c)) throw new IOException("旧会话尚未恢复，拒绝启动新的回退进程");
-        for (String s : new String[]{"stop", "ready", "state", "pid"}) {
+        for (String s : new String[]{"stop", "ready", "state", "pid", "compositor.properties", "compositor.tmp"}) {
             File f = file(c, s);
             if (f.exists() && !f.delete()) throw new IOException("无法清理旧回退状态");
         }
         // Precreate files as the app UID: root writes must not make them unreadable to the app.
-        for (String s : new String[]{"ready", "state", "pid", "rollback.log", "target", "applied", "bootid"}) write(file(c, s), "");
+        for (String s : new String[]{"ready", "state", "pid", "rollback.log", "target", "applied", "bootid", "error", "compositor-error.txt", "compositor-report.txt"}) write(file(c, s), "");
         save(c, p); lease(c, expirySeconds);
+        helper(c);
         File script = file(c, "watchdog.sh");
-        write(script, GuardScript.build(directory(c).getAbsolutePath(), p, "/system/bin/wm", "/proc/uptime", "/system/bin/dumpsys"));
+        write(script, GuardScript.build(directory(c).getAbsolutePath(), p, "/system/bin/wm", "/proc/uptime", "/system/bin/dumpsys",
+            true, rotation, Config.gpuCompatibility(c)));
         RootShell.run("nohup /system/bin/sh " + RootShell.quote(script.getAbsolutePath())
             + " </dev/null >/dev/null 2>&1 &", 5).checked();
-        long end = SystemClock.elapsedRealtime() + 3000;
-        while (!read(file(c, "ready")).equals("ready") && SystemClock.elapsedRealtime() < end) Thread.sleep(50);
+        long end = SystemClock.elapsedRealtime() + 10000;
+        while (!read(file(c, "ready")).equals("ready") && read(file(c, "state")).isEmpty() && SystemClock.elapsedRealtime() < end) Thread.sleep(50);
         String pid = read(file(c, "pid"));
         if (!read(file(c, "ready")).equals("ready") || !pid.matches("[1-9][0-9]{0,8}"))
-            throw new IOException("独立回退进程未启动，未修改显示");
+            throw new IOException(read(file(c, "error")).isEmpty() ? "独立回退进程未启动，未修改显示" : read(file(c, "error")));
         RootShell.run("kill -0 " + pid, 3).checked();
         if (SystemClock.elapsedRealtime() / 1000 >= expirySeconds) throw new IOException("安全预览已超时，未修改显示");
     }
@@ -112,9 +116,9 @@ final class RootController {
         File temp = file(c, "target.tmp"); write(temp, target);
         Files.move(temp.toPath(), file(c, "target").toPath(), StandardCopyOption.REPLACE_EXISTING,
                 StandardCopyOption.ATOMIC_MOVE);
-        long end = Math.min(SystemClock.elapsedRealtime() + 5000, expiry * 1000);
+        long end = Math.min(SystemClock.elapsedRealtime() + 10000, expiry * 1000);
         while (SystemClock.elapsedRealtime() < end) {
-            if (!read(file(c, "state")).isEmpty()) throw new IOException("回退已开始");
+            if (!read(file(c, "state")).isEmpty()) throw new IOException(read(file(c, "error")).isEmpty()?"回退已开始":read(file(c, "error")));
             if (read(file(c, "applied")).equals(target)) return;
             Thread.sleep(50);
         }
@@ -128,7 +132,7 @@ final class RootController {
         String savedBoot = read(file(c, "bootid"));
         String currentBoot = RootShell.run("cat /proc/sys/kernel/random/boot_id", 5).checked().trim();
         boolean sameBoot = !savedBoot.isEmpty() && savedBoot.equals(currentBoot);
-        long end = SystemClock.elapsedRealtime() + 8000;
+        long end = SystemClock.elapsedRealtime() + 12000;
         String state = read(file(c, "state")), pid = read(file(c, "pid"));
         while (sameBoot && !state.equals("restored") && !state.equals("failed") && !pid.isEmpty()
                 && SystemClock.elapsedRealtime() < end) {
@@ -143,12 +147,22 @@ final class RootController {
             restore += "; sized=$?; /system/bin/wm scaling " + DisplayScaling.argument(original.scalingMode)
                 + "; scaled=$?; [ \"$sized\" -eq 0 ] && [ \"$scaled\" -eq 0 ]";
         }
-        RootShell.run(restore, 8).checked();
+        Exception restoreError = null;
+        try { RootShell.run(restore, 8).checked(); }
+        catch (Exception e) { restoreError = e; }
+        if (file(c, "compositor.properties").isFile()) {
+            try {
+                helper(c); // The installed APK path may have changed after an update.
+                RootShell.run("timeout 8 /system/bin/sh " + RootShell.quote(file(c,"compositor.sh").getAbsolutePath()) + " restore", 10).checked();
+            } catch (Exception e) { if (restoreError == null) restoreError = e; }
+        }
+        if (restoreError != null) throw restoreError;
         DisplayProfile current = original.scalingMode == DisplayScaling.UNKNOWN
             ? DisplayProfile.parse(RootShell.run(QUERY, 8).checked()) : query();
         if (!original.sameSize(current) || (original.scalingMode != DisplayScaling.UNKNOWN
                 && original.scalingMode != current.scalingMode))
             throw new IOException("尺寸或缩放恢复校验失败，请使用备用恢复命令");
         if (hasBackup(c) && !file(c, "backup.properties").delete()) throw new IOException("显示已恢复，但备份清理失败");
+        file(c,"compositor.properties").delete();
     }
 }

@@ -18,6 +18,7 @@ public class MainActivity extends Activity {
     Preview preview;
     SeekBar width, radius;
     Switch rootSwitch;
+    CheckBox gpuMode;
     Button keepButton;
     Button stretchButton;
     boolean updatingSwitch, busy;
@@ -54,7 +55,7 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.3", 24);
+        text(header, "对称黑边 1.4", 24);
         status = text(header, "", 12); status.setMaxLines(2);
         rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);
@@ -63,7 +64,6 @@ public class MainActivity extends Activity {
         footer = new LinearLayout(this); footer.setOrientation(1); screen.addView(footer);
         keepButton = button(footer, "检查手机画面并确认", this::confirmPhysicalDisplay);
         stretchButton = button(footer, "画面被拉伸：恢复并保留黑边", () -> {
-            Config.reportStretch(this);
             RootSyncService s = RootSyncService.instance;
             if (s != null) s.fallback("你反馈实际画面被拉伸");
             update();
@@ -102,10 +102,6 @@ public class MainActivity extends Activity {
         root.addView(rootSwitch); rootSwitch.setChecked(Config.rootWanted(this));
         rootSwitch.setOnCheckedChangeListener((view, checked) -> {
             if (updatingSwitch) return;
-            if (checked && !Config.rootRestriction(this).isEmpty()) {
-                updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
-                toast(Config.rootRestriction(this)); return;
-            }
             if (checked && (!RootController.available || RootController.recovering || busy)) {
                 updatingSwitch = true; view.setChecked(false); updatingSwitch = false;
                 toast("请先点击检测并申请 Root 权限"); return;
@@ -117,7 +113,10 @@ public class MainActivity extends Activity {
             Config.stop(this); Config.prefs(this).edit().putBoolean("rootWanted", checked).apply(); update();
         });
         button("检测并申请 Root 权限", this::requestRoot);
-        text("Root：系统报告的映射不能证明实际面板没有拉伸。小米 13 Ultra / Android 16 及以上暂时停用 Root 收窄，普通黑边与圆角照常可调。其他机型每次改动需直接检查手机画面，在 15 秒内确认；失败时恢复尺寸与缩放。每侧最多 15%，短边至少 320 dp；DPI 不变。", 13);
+        gpuMode=new CheckBox(this); gpuMode.setText("GPU 合成兼容模式（处理修改分辨率后的拉伸）");
+        gpuMode.setChecked(Config.gpuCompatibility(this)); root.addView(gpuMode);
+        gpuMode.setOnCheckedChangeListener((v,on) -> Config.prefs(this).edit().putBoolean("gpuCompatibility",on).apply());
+        text("Root 会收窄系统布局，并明确设置屏幕合成层的居中区域。GPU 兼容模式用于绕过硬件合成的拉伸路径，可能增加耗电、影响视频播放；退出时恢复原设置。没有机型禁用名单。每次改动需在倒计时内直接检查手机上的圆形及触摸；不确认会自动恢复。", 13);
         button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
@@ -157,7 +156,6 @@ public class MainActivity extends Activity {
                 else toast("预览已结束，请重新启用");
                 update();
             }).setNegativeButton("被拉伸 / 恢复", (d, which) -> {
-                Config.reportStretch(this);
                 if (RootSyncService.instance == session) session.fallback("你反馈实际画面被拉伸");
                 update();
             }).show();
@@ -194,9 +192,14 @@ public class MainActivity extends Activity {
                     : "以下命令根据本次会话的原始尺寸与缩放备份生成。";
             } catch (Exception e) { note = "原始备份无法读取，请核对原始设置后使用命令。"; }
         }
+        try {
+            if(RootController.file(this,"compositor.properties").isFile()) {
+                command += "; sh " + RootShell.quote(RootController.file(this,"compositor.sh").getAbsolutePath()) + " restore";
+            }
+        } catch(Exception ignored) { }
         new AlertDialog.Builder(this).setTitle("显示异常时恢复")
             .setMessage("优先等待自动回退，或点击页面底部恢复按钮。\n\n" + note
-                + "\n从此前已授权的电脑执行：\nadb shell su -c '" + command + "'"
+                + "\n在已授权的 Root 终端执行：\n" + command
                 + "\n\nDPI 未修改，无需重置密度。恢复成功前不要卸载应用、清除数据或撤销 Root。重启/更新后会尝试恢复，但 ROM 或 Root 管理器可能阻止。")
             .setPositiveButton("知道了", null).show();
     }
@@ -238,8 +241,6 @@ public class MainActivity extends Activity {
         });
     }
     void startMask() {
-        if (Config.rootWanted(this) && !Config.rootRestriction(this).isEmpty())
-            Config.prefs(this).edit().putBoolean("rootWanted", false).apply();
         RootSyncService session = RootSyncService.instance;
         if (busy || RootController.recovering || (session != null && session.stopping)
                 || (session == null && RootController.hasBackup(this))) { toast("原始显示正在恢复，确认恢复后再启用"); return; }
@@ -289,9 +290,7 @@ public class MainActivity extends Activity {
         if (session != null && session.active) extra = session.pending
             ? "\n请确认显示及触摸正常；" + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒后自动恢复"
             : "\n已确认；服务停止或心跳丢失时恢复原始显示";
-        String restriction = Config.rootRestriction(this);
-        if (rootStatus != null) rootStatus.setText((restriction.isEmpty() ? RootController.message
-            : restriction + (RootController.recovering || RootController.hasBackup(this) ? "\n" + RootController.message : "")) + extra);
+        if (rootStatus != null) rootStatus.setText(RootController.message + extra);
         if (keepButton != null) {
             boolean show = session != null && session.pending && !session.stopping;
             boolean canConfirm = session != null && session.canConfirm();
@@ -300,7 +299,7 @@ public class MainActivity extends Activity {
                 + Math.max(0, session.previewDeadline - SystemClock.elapsedRealtime() / 1000) + " 秒" : "正在应用分辨率…");
         }
         if (stretchButton != null) stretchButton.setVisibility(session != null && session.active && !session.stopping ? View.VISIBLE : View.GONE);
-        if (rootSwitch != null) rootSwitch.setEnabled(restriction.isEmpty());
+        if (gpuMode != null) gpuMode.setEnabled(session==null && !RootController.hasBackup(this));
         if (rootSwitch != null && rootSwitch.isChecked() != Config.rootWanted(this)) {
             updatingSwitch = true; rootSwitch.setChecked(Config.rootWanted(this)); updatingSwitch = false;
         }

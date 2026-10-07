@@ -3,11 +3,16 @@ package com.edges.mask;
 /** Runs outside the app process. Paths are private app paths, not UI input. */
 final class GuardScript {
     static String build(String dir, DisplayProfile original, String wm, String uptime, String dumpsys) {
+        return build(dir, original, wm, uptime, dumpsys, false, 0, false);
+    }
+    static String build(String dir, DisplayProfile original, String wm, String uptime, String dumpsys,
+                        boolean compositor, int rotation, boolean gpu) {
         String scaling = DisplayScaling.argument(original.scalingMode);
         return "#!/system/bin/sh\n"
             + "DIR=" + RootShell.quote(dir) + "\nWM=" + RootShell.quote(wm) + "\n"
             + "DUMP=" + RootShell.quote(dumpsys) + "\n"
             + "CLOCK=" + RootShell.quote(uptime) + "\n"
+            + (compositor ? "project() { timeout 8 sh \"$DIR/compositor.sh\" \"$@\"; }\n" : "")
             + "mode() { " + DisplayScaling.queryCommand("\"$DUMP\"") + "; }\n"
             + "verify() {\n"
             + "  out=$(\"$WM\" size 2>&1) || return 1\n"
@@ -25,7 +30,8 @@ final class GuardScript {
             + "  for attempt in 1 2 3; do\n"
             + "    \"$WM\" size " + RootShell.quote(original.restoreArgument()) + " >\"$DIR/rollback.log\" 2>&1; sized=$?\n"
             + "    \"$WM\" scaling " + RootShell.quote(scaling) + " >>\"$DIR/rollback.log\" 2>&1; scaled=$?\n"
-            + "    if [ \"$sized\" -eq 0 ] && [ \"$scaled\" -eq 0 ] && verify; then\n"
+            + (compositor ? "    project restore >>\"$DIR/rollback.log\" 2>&1; projected=$?\n" : "    projected=0\n")
+            + "    if [ \"$sized\" -eq 0 ] && [ \"$scaled\" -eq 0 ] && [ \"$projected\" -eq 0 ] && verify; then\n"
             + "      printf 'restored\\n' >\"$DIR/state\"\n"
             + "      exit 0\n    fi\n"
             + "    sleep 1\n  done\n"
@@ -33,8 +39,10 @@ final class GuardScript {
             + "trap restore HUP INT TERM\n"
             + "printf '%s\\n' \"$$\" >\"$DIR/pid\"\n"
             + "cat /proc/sys/kernel/random/boot_id >\"$DIR/bootid\" 2>/dev/null || exit 1\n"
+            + (compositor ? "project prepare " + original.width + " " + original.height + " " + rotation + " " + (gpu?1:0)
+                + " >\"$DIR/compositor-error.txt\" 2>&1 || { cp \"$DIR/compositor-error.txt\" \"$DIR/error\"; restore; }\n" : "")
             + "printf 'ready\\n' >\"$DIR/ready\"\n"
-            + "last=''\n"
+            + "last=''; checked=0\n"
             + "while [ ! -f \"$DIR/stop\" ]; do\n"
             + "  expiry=$(cat \"$DIR/deadline\" 2>/dev/null)\n"
             + "  case \"$expiry\" in ''|*[!0-9]*) break;; esac\n"
@@ -55,7 +63,12 @@ final class GuardScript {
             + "    current=$(mode) || break\n    [ \"$current\" = 'EdgeMask scaling: off' ] || break\n"
             + "    out=$(\"$WM\" size 2>&1) || break\n"
             + "    printf '%s\\n' \"$out\" | grep -F -x \"Override size: $target\" >/dev/null || break\n"
+            + (compositor ? "    project apply \"$tw\" \"$th\" >\"$DIR/compositor-error.txt\" 2>&1 || { cp \"$DIR/compositor-error.txt\" \"$DIR/error\"; break; }\n" : "")
             + "    last=$target; printf '%s\\n' \"$target\" >\"$DIR/applied\"\n"
-            + "  fi\n  sleep 0.2 2>/dev/null || sleep 1\ndone\nrestore\n";
+            + "    checked=$now\n  fi\n"
+            + (compositor ? "  if [ -n \"$last\" ] && [ $((now - checked)) -ge 5 ]; then\n"
+                + "    project check \"${last%x*}\" \"${last#*x}\" >\"$DIR/compositor-error.txt\" 2>&1 || { cp \"$DIR/compositor-error.txt\" \"$DIR/error\"; break; }\n"
+                + "    checked=$now\n  fi\n" : "")
+            + "  sleep 0.2 2>/dev/null || sleep 1\ndone\nrestore\n";
     }
 }
