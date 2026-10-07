@@ -11,6 +11,7 @@ import android.view.*;
 import android.widget.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.io.*;
 
 public class MainActivity extends Activity {
     LinearLayout root, screen, header, footer;
@@ -22,6 +23,8 @@ public class MainActivity extends Activity {
     Button keepButton;
     Button stretchButton;
     boolean updatingSwitch, busy;
+    File pendingEvidence;
+    static final int SAVE_ROM_EVIDENCE=51;
     final Handler ui = new Handler(Looper.getMainLooper());
     final ExecutorService tasks = Executors.newSingleThreadExecutor();
     final Runnable refreshStatus = new Runnable() {
@@ -55,7 +58,9 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.5", 24);
+        text(header, "对称黑边 1.5.1 · 诊断版", 24);
+        if(saved!=null && saved.getString("romEvidence")!=null)
+            pendingEvidence=new File(saved.getString("romEvidence"));
         status = text(header, "", 12); status.setMaxLines(2);
         rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);
@@ -113,11 +118,13 @@ public class MainActivity extends Activity {
             Config.stop(this); Config.prefs(this).edit().putBoolean("rootWanted", checked).apply(); update();
         });
         button("检测并申请 Root 权限", this::requestRoot);
-        gpuMode=new CheckBox(this); gpuMode.setText("GPU 合成兼容模式（处理修改分辨率后的拉伸）");
+        gpuMode=new CheckBox(this); gpuMode.setText("GPU 合成兼容模式（尝试修正拉伸）");
         gpuMode.setChecked(Config.gpuCompatibility(this)); root.addView(gpuMode);
         gpuMode.setOnCheckedChangeListener((v,on) -> Config.prefs(this).edit().putBoolean("gpuCompatibility",on).apply());
-        text("Root 会收窄系统布局，优先保持原始输出尺寸；若系统同步收窄输出，则通过 GPU 反向补偿拉伸。此模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
+        text("Root 会收窄系统布局，优先保持原始输出尺寸；若系统同步收窄输出，则尝试通过 GPU 反向补偿拉伸。此模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
         button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
+        button("导出 ROM 显示组件（只读）", this::exportRomEvidence);
+        text("1.5.1 新增系统显示组件导出，用于定位投影不生效。该版尚未修复已反馈的拉伸；导出无需再次修改分辨率。",13);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
         button("启用 / 应用当前设置", this::startMask);
@@ -174,6 +181,82 @@ public class MainActivity extends Activity {
                         ((ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("EdgeMask 显示诊断", report));
                         toast("显示诊断已复制");
                     }).setNegativeButton("取消", null).show();
+                update();
+            });
+        });
+    }
+    boolean evidenceReady() {
+        if(busy || RootController.recovering || RootSyncService.instance!=null || RootController.hasBackup(this)) {
+            toast("请先恢复原始显示，等待恢复完成后再导出");return false;
+        }
+        return true;
+    }
+    void exportRomEvidence() {
+        if(!evidenceReady()) return;
+        new AlertDialog.Builder(this).setTitle("导出用于定位的系统显示组件")
+            .setMessage("将复制指定的系统显示库、可读取的 framework.jar，以及机型、系统版本和现有显示诊断，保存为 ZIP。不会修改分辨率，不读取相册、聊天、账号或应用数据，不会自动发送。文件可能约几到几十 MB；超大组件会跳过并记录。")
+            .setPositiveButton("生成 ZIP",(dialog,which) -> {
+                if(!evidenceReady()) return;
+                busy=true;update();toast("正在复制只读系统组件，请稍候");
+                tasks.execute(() -> {
+                    try {
+                        String diagnostic=RootDiagnostics.collect(this);
+                        if(RootSyncService.instance!=null || RootController.hasBackup(this))
+                            throw new IOException("显示会话已启动，请恢复后再导出");
+                        File archive=RomEvidence.create(getCacheDir(),diagnostic,RomEvidence.rootSource());
+                        ui.post(() -> {
+                            busy=false;
+                            if(isDestroyed()) { deleteEvidence(archive);return; }
+                            deleteEvidence(pendingEvidence);pendingEvidence=archive;
+                            chooseEvidenceDestination();update();
+                        });
+                    } catch(Exception e) {
+                        ui.post(() -> {busy=false;if(!isDestroyed()){toast("导出未完成："+e.getMessage());update();}});
+                    }
+                });
+            }).setNegativeButton("取消",null).show();
+    }
+    void chooseEvidenceDestination() {
+        Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/zip").putExtra(Intent.EXTRA_TITLE,"EdgeMask-ROM-evidence.zip");
+        try { startActivityForResult(save,SAVE_ROM_EVIDENCE); }
+        catch(ActivityNotFoundException e) { toast("未找到系统文件保存界面");deleteEvidence(pendingEvidence);pendingEvidence=null; }
+    }
+    static void deleteEvidence(File archive) {
+        if(archive!=null) {File folder=archive.getParentFile();archive.delete();if(folder!=null)folder.delete();}
+    }
+    @Override protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        if(pendingEvidence!=null)out.putString("romEvidence",pendingEvidence.getAbsolutePath());
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data) {
+        super.onActivityResult(request,result,data);
+        if(request!=SAVE_ROM_EVIDENCE)return;
+        if(result!=RESULT_OK || data==null || data.getData()==null) {
+            deleteEvidence(pendingEvidence);pendingEvidence=null;return;
+        }
+        File archive=pendingEvidence;
+        if(archive==null || !archive.isFile()){toast("临时导出包已失效，请重新导出");return;}
+        Uri destination=data.getData();busy=true;update();
+        tasks.execute(() -> {
+            boolean success=false;
+            try(InputStream in=new FileInputStream(archive);OutputStream out=getContentResolver().openOutputStream(destination,"wt")) {
+                if(out==null)throw new IOException("无法写入所选文件");
+                byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);
+                out.flush();success=true;
+            } catch(Exception ignored) { }
+            final boolean saved=success;
+            ui.post(() -> {
+                busy=false;
+                if(saved){deleteEvidence(archive);if(pendingEvidence==archive)pendingEvidence=null;}
+                if(isDestroyed())return;
+                if(saved)new AlertDialog.Builder(this).setTitle("导出包已保存")
+                    .setMessage("文件名：EdgeMask-ROM-evidence.zip。可以在文件管理器中检查内容，再自行把 ZIP 发到当前对话。")
+                    .setPositiveButton("知道了",null).show();
+                else new AlertDialog.Builder(this).setTitle("保存未完成")
+                    .setMessage("生成的 ZIP 暂时保留在应用内，可以重新选择保存位置。")
+                    .setPositiveButton("重新保存",(d,w)->chooseEvidenceDestination())
+                    .setNegativeButton("取消",(d,w)->{deleteEvidence(archive);pendingEvidence=null;}).show();
                 update();
             });
         });

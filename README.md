@@ -1,8 +1,24 @@
-# EdgeMask · 对称黑边 1.5
+# EdgeMask · 对称黑边 1.5.1 · 诊断版
 
 Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可选 Root 收窄系统布局，并将内容投影到屏幕中央。
 
 **AI 编写声明：源码、说明和 APK 由 ChatGPT / Codex 根据用户需求编写和构建。**
+
+## 1.5.1：取得 ROM 显示组件，继续定位投影不生效
+
+**该版新增只读导出，尚未修复真机横向拉伸。Root 显示修改与回退路径沿用 1.5；没有新增显示写入，也没有按机型禁用功能。**
+
+1.5 的真机报告补齐了关键证据：修改后逻辑区、输出区、GPU 帧缓冲均为 1324×3200；请求恢复 1440×3200 输出缓冲后尺寸未改变；GPU 标志由 0 变为 1，但目标投影 `[53, 0, 1271, 3200]` 连续五次读回仍是 `[0, 0, 1324, 3200]`。由此能确认请求未在输出几何中生效，不能确定厂商是丢弃请求还是随后覆盖，也不能把模拟成功称作真机修复。
+
+为分析实际 ROM 提供一键导出：
+
+1. 在旧版恢复原始显示，等待恢复完成后覆盖安装 [EdgeMask-1.5.1.apk](apk/EdgeMask-1.5.1.apk)，保留原签名。
+2. 点击“导出 ROM 显示组件（只读）”→“生成 ZIP”，按提示授予 Root。
+3. 在系统文件保存界面保存 `EdgeMask-ROM-evidence.zip`。可用文件管理器查看清单，再自行把 ZIP 发到当前对话；无需再次修改分辨率。
+
+导出包含允许列表中的系统显示组件，例如 `libgui.so`、`libandroid_runtime.so`、SurfaceFlinger 相关库、SurfaceFlinger 可执行程序，以及可取得且不超限的 `framework.jar`。附有系统版本/机型、现有数值显示诊断、文件尺寸与 SHA-256。只在指定系统库目录匹配 SurfaceFlinger 文件名；不读取相册、聊天、账号、应用数据或 logcat，不自动上传。拒绝解析到 `/data`、共享存储或范围外位置的路径。单组件不超过 16 MiB，原始组件合计不超过 28 MiB；缺失、无法读取或超限的组件会记录在清单中。
+
+本版通过 42 项导出路径、大小边界和二进制完整性检查；安卓源码仍编译并使用原发行密钥签名。未连接安卓真机，Root 读取与系统文件保存界面的实际表现仍需验证。导出的厂商二进制不纳入 GitHub 仓库。
 
 ## 1.5：适配修改尺寸后的输出比例变化
 
@@ -47,7 +63,7 @@ Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可
 
 ## 下载与使用
 
-先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.5.apk](apk/EdgeMask-1.5.apk)。与 1.0–1.4.1 使用相同签名。
+先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.5.1.apk](apk/EdgeMask-1.5.1.apk)。与 1.0–1.5 使用相同签名。针对当前投影不生效的问题，请按前面的导出步骤取得组件；以下是现有遮罩和实验 Root 功能的操作方法。
 
 1. 选择无障碍遮罩或普通悬浮窗，授予相应权限。
 2. 点击“检测并申请 Root 权限”，开启 Root 同步；保留“GPU 合成兼容模式”勾选。
@@ -123,6 +139,9 @@ java -cp build/safety com.edges.mask.CompositorPlanChecks
 python3 tests/watchdog_checks.py build/safety
 python3 tests/compositor_guard_checks.py build/safety
 python3 tests/compositor_bridge_checks.py
+# 只读 ROM 导出检查
+javac -d build/safety app/src/main/java/com/edges/mask/RootShell.java app/src/main/java/com/edges/mask/RomEvidence.java tests/RomEvidenceChecks.java
+java -cp build/safety com.edges.mask.RomEvidenceChecks
 ```
 
 实现依据：[AOSP SurfaceControl](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/core/java/android/view/SurfaceControl.java)、[DisplayControl](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/DisplayControl.java)、[SurfaceFlinger](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/SurfaceFlinger.cpp)、[Output](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/CompositionEngine/src/Output.cpp)、[LogicalDisplay](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android16-release/services/core/java/com/android/server/display/LogicalDisplay.java)。Root 类加载方式参考 [scrcpy 的 DisplayControl 封装](https://github.com/Genymobile/scrcpy/blob/master/server/src/main/java/com/genymobile/scrcpy/wrappers/DisplayControl.java)。GPU 兼容路径仅使用 AOSP 已定义的 1010 查询和 1008 设置协议，先验证接口描述符、完整回复格式并备份原值，不猜测厂商私有命令。
