@@ -1,0 +1,9 @@
+Official Magisk source test fixtures, unmodified unless explicitly rebased to a temporary filesystem at test runtime.
+Copyright John Wu and Magisk contributors. GNU GPL v3.0.
+See ../../../compat/qti-framebuffer/LICENSE-Magisk.
+
+install_module.sh: install_module() extracted without changes from scripts/util_functions.sh.
+FlashZip-current.kt: app/core/src/main/java/com/topjohnwu/magisk/core/tasks/FlashZip.kt.
+Both from commit 5f7b39ac631a63fa0af85ce4d099eaf78bb18d2c.
+FlashZip-v24.3.kt: app/src/main/java/com/topjohnwu/magisk/core/tasks/FlashZip.kt at tag v24.3.
+Source: https://github.com/topjohnwu/Magisk

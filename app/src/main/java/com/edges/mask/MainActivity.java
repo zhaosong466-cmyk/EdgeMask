@@ -59,7 +59,7 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.6", 24);
+        text(header, "对称黑边 1.6.1", 24);
         if(saved!=null && saved.getString("romEvidence")!=null)
             pendingEvidence=new File(saved.getString("romEvidence"));
         status = text(header, "", 12); status.setMaxLines(2);
@@ -124,6 +124,7 @@ public class MainActivity extends Activity {
         gpuMode.setOnCheckedChangeListener((v,on) -> Config.prefs(this).edit().putBoolean("gpuCompatibility",on).apply());
         text("Root 收窄系统布局并保持内容居中。GPU 模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
         button("修复分辨率修改后被拉伸（Root 模块）", this::showFramebufferCompat);
+        button("查看修复模块状态（只读）", this::readFramebufferStatus);
         text("已定位反馈 ROM 的缩放覆盖路径。首次安装修复模块并重启一次，此后用本应用实时调宽度。模块可在 Root 管理器停用并重启撤回；圆角仍在应用中调整。",13);
         button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
         button("导出 ROM 显示组件（只读）", this::exportRomEvidence);
@@ -188,20 +189,54 @@ public class MainActivity extends Activity {
         });
     }
     boolean evidenceReady() {
-        if(busy || RootController.recovering || RootSyncService.instance!=null || RootController.hasBackup(this)) {
-            toast("请先恢复原始显示，等待恢复完成后再导出");return false;
+        if(busy || MagiskModuleInstaller.running() || RootController.recovering || RootSyncService.instance!=null || RootController.hasBackup(this)) {
+            toast("请先恢复原始显示，等待当前操作完成后再继续");return false;
         }
         return true;
     }
     void showFramebufferCompat() {
         new AlertDialog.Builder(this).setTitle("修复缩放覆盖")
             .setMessage("该 ROM 会覆盖居中位置并把窄画面铺满屏幕。修复模块在开机时关闭这条缩放路径；安装本 APK 本身不会修改开机设置。\n\n"
-                +"1. 先恢复原始显示。\n2. 保存模块 ZIP，在 Magisk / KernelSU 管理器中选择从本地安装。\n3. 手动重启一次，再回到本应用检测 Root、设置每侧 1% 并启用。此后调整宽度无需重启。\n\n"
+                +"1. 先恢复原始显示。\n2. 点击“通过面具安装”并授予 Root，将内置模块交给 Magisk 官方命令安装，绕过面具界面的 Unzip error。也可保存 ZIP，在 Magisk / KernelSU 管理器中从本地安装。\n3. 仅在安装成功后手动重启一次，再回到本应用检测 Root、设置每侧 1% 并启用。此后调整宽度无需重启。\n\n"
                 +"模块只对已分析的显示库生效；系统更新改变显示库时会跳过。只修改一个内存中的缩放开关。\n\n"
                 +"撤回：先在应用恢复原始显示，再停用或移除模块并重启。卸载 APK 不会移除模块。请检查真机画面与触摸后再保留设置。")
-            .setPositiveButton("保存修复模块",(d,w)->{if(evidenceReady())chooseModuleDestination();})
-            .setNeutralButton("查看模块状态",(d,w)->readFramebufferStatus())
+            .setPositiveButton("通过面具安装",(d,w)->{if(evidenceReady())installFramebufferModule();})
+            .setNeutralButton("保存 ZIP",(d,w)->{if(evidenceReady())chooseModuleDestination();})
             .setNegativeButton("关闭",null).show();
+    }
+    void installFramebufferModule() {
+        busy=true;RootController.message="正在通过面具安装模块，等待 Root 授权…";update();
+        tasks.execute(()->{
+            boolean installed=false;String value;File archive=null,launcher=null;
+            try {
+                if(RootSyncService.instance!=null || RootController.hasBackup(this) || RootController.recovering)
+                    throw new IOException("请先恢复原始显示并等待恢复完成");
+                File dir=new File(getFilesDir(),"module-installer");
+                if(!dir.isDirectory() && !dir.mkdirs())throw new IOException("无法建立应用内安装目录");
+                archive=File.createTempFile("module-",".zip",dir);
+                launcher=File.createTempFile("installer-",".sh",dir);
+                copyInstallerAsset(FramebufferCompat.ARCHIVE,archive);
+                copyInstallerAsset("magisk-install.sh",launcher);
+                value=MagiskModuleInstaller.install(launcher,archive);installed=true;
+            }catch(Exception e){value="安装未确认："+e.getMessage()+"\n\n先查看面具模块列表。成功之前不要重启；此操作没有自动重启，也没有修改当前显示参数。";}
+            if(installed){if(archive!=null)archive.delete();if(launcher!=null)launcher.delete();}
+            final boolean success=installed;final String report=value;
+            ui.post(()->{busy=false;if(isDestroyed())return;
+                RootController.message=success?"修复模块已安装，请手动重启一次":"模块安装未确认";
+                new AlertDialog.Builder(this).setTitle(success?"修复模块安装成功":"模块安装未完成")
+                    .setMessage(success?"模块已交给面具安装，并已检查新版本文件。请手动重启一次，之后回到应用查看模块状态，再设每侧 1% 检查手机画面与触摸。\n\n"+report:report)
+                    .setPositiveButton("知道了",null)
+                    .setNeutralButton("复制安装结果",(d,w)->{
+                        android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText("EdgeMask 模块安装结果",report));toast("已复制");
+                    }).show();update();});
+        });
+    }
+    void copyInstallerAsset(String name,File destination) throws IOException {
+        try(InputStream in=getAssets().open(name);FileOutputStream out=new FileOutputStream(destination)) {
+            byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);
+            out.getFD().sync();
+        }
     }
     void chooseModuleDestination() {
         Intent save=new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
@@ -380,6 +415,7 @@ public class MainActivity extends Activity {
         });
     }
     void startMask() {
+        if(MagiskModuleInstaller.running()){toast("模块正在安装，请稍后");return;}
         RootSyncService session = RootSyncService.instance;
         if (busy || RootController.recovering || (session != null && session.stopping)
                 || (session == null && RootController.hasBackup(this))) { toast("原始显示正在恢复，确认恢复后再启用"); return; }

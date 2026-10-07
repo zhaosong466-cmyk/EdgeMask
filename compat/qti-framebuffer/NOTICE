@@ -1,0 +1,9 @@
+EdgeMask QTI compatibility module
+
+Original module scripts: AI-written by ChatGPT / Codex.
+
+META-INF/com/google/android/update-binary is an unmodified copy of
+Magisk scripts/module_installer.sh by John Wu and Magisk contributors.
+Source: https://github.com/topjohnwu/Magisk/blob/5f7b39ac631a63fa0af85ce4d099eaf78bb18d2c/scripts/module_installer.sh
+License: GNU General Public License v3.0; see LICENSE-Magisk.
+SHA-256: bcf4b1d9913f3af17755569c853e0b5a75b8005f6a18eb3f86dadcc0e968c29d

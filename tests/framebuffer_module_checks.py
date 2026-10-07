@@ -99,14 +99,20 @@ set_perm(){ printf '%s\\n' "$*" >> "$EDGE_FIXTURE/permissions"; }
         count += 1
         print('PASS: module', name)
 
-archive = ROOT / 'app/src/main/assets/EdgeMask-QTI-Compat-1.0.zip'
+archive = ROOT / 'app/src/main/assets/EdgeMask-QTI-Compat-1.0.1.zip'
 with zipfile.ZipFile(archive) as z:
-    expected = {'module.prop', 'supported-libraries.txt', 'customize.sh', 'post-fs-data.sh', 'skip_mount'}
+    expected = {'module.prop', 'supported-libraries.txt', 'customize.sh', 'post-fs-data.sh', 'skip_mount',
+                'META-INF/com/google/android/update-binary', 'META-INF/com/google/android/updater-script',
+                'LICENSE-Magisk', 'NOTICE'}
     assert set(z.namelist()) == expected and z.testzip() is None
     for name in expected:
         assert z.read(name) == (SOURCE / name).read_bytes()
     assert 'AI-written' in z.read('module.prop').decode()
     assert z.getinfo('post-fs-data.sh').external_attr >> 16 == 0o100755
+    assert z.getinfo('META-INF/com/google/android/update-binary').external_attr >> 16 == 0o100755
+    assert z.read('META-INF/com/google/android/updater-script') == b'#MAGISK\n'
+    assert hashlib.sha256(z.read('META-INF/com/google/android/update-binary')).hexdigest() == 'bcf4b1d9913f3af17755569c853e0b5a75b8005f6a18eb3f86dadcc0e968c29d'
+    assert all(i.extract_version < 45 and not i.flag_bits & 1 for i in z.infolist())
     assert not any(name in z.namelist() for name in ('system.prop', 'service.sh', 'sepolicy.rule', 'uninstall.sh'))
 count += 1
 print('PASS: minimal reversible package; disabling/removing stops boot override')

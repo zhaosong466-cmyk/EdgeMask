@@ -1,8 +1,8 @@
 package com.edges.mask;
 
-/** Read-only module status. The APK does not install modules or change boot properties. */
+/** Read-only module status. Boot properties are changed only by the separate boot module. */
 final class FramebufferCompat {
-    static final String ARCHIVE="EdgeMask-QTI-Compat-1.0.zip";
+    static final String ARCHIVE="EdgeMask-QTI-Compat-1.0.1.zip";
     static String status() throws Exception {
         String dir="/data/adb/modules/edgemask_qti_framebuffer";
         String command="printf '缩放属性（不是进程内缓存值）: '; getprop vendor.display.enable_fb_scaling; "

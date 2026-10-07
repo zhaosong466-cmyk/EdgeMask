@@ -1,8 +1,26 @@
-# EdgeMask · 对称黑边 1.6
+# EdgeMask · 对称黑边 1.6.1
 
 Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可选 Root 收窄系统布局，并将内容投影到屏幕中央。
 
-**AI 编写声明：源码、说明、APK 和修复模块由 ChatGPT / Codex 根据用户需求编写和构建。**
+**AI 编写声明：应用、自编模块脚本和说明由 ChatGPT / Codex 根据用户需求编写并构建。模块使用的官方 Magisk 安装入口保留上游来源和 GPL v3 许可。**
+
+## 1.6.1：修复面具模块安装入口，增加命令安装
+
+1.0 模块 ZIP 完整性校验虽然通过，但遗漏了传统 `META-INF/com/google/android/update-binary` 与 `updater-script`。Magisk v24.3 的管理器源码会先解包这个目录并读取 `#MAGISK` 标记，旧包因此触发 `Unzip error`。当前 Magisk 管理器的同一错误文字也可能来自读取其 APK 自带安装脚本的失败；用户尚未提供面具版本，不能把截图的唯一原因确定为缺少入口。
+
+配套模块 **1.0.1** 补入未修改的官方安装脚本与 `#MAGISK` 标记，使用普通 ZIP 格式，并附上来源和许可。APK **1.6.1** 更新内置 ZIP，并增加“通过面具安装”：用户点击后授予 Root，应用仅将内置模块交给已安装 Magisk 的官方 `--install-module` 命令，绕过管理器的解包/资源读取界面。安装后检查暂存模块 ID、版本和必需文件；失败显示可复制的完整结果。没有自动重启，也不会在安装时改当前显示或缩放属性。非 Magisk 用户仍可保存 ZIP 后交给对应管理器安装。
+
+建议操作：
+
+1. 在旧版恢复原始显示，等待恢复完成；覆盖安装 [EdgeMask-1.6.1.apk](apk/EdgeMask-1.6.1.apk)，保留原签名。
+2. 点击“修复分辨率修改后被拉伸（Root 模块）”→“通过面具安装”，授予 Root。只有安装成功才手动重启一次。
+3. 重启后点击“查看修复模块状态（只读）”，再用每侧 1% 验证手机画面及触摸。宽度、圆角仍在 APK 中实时调整。
+
+也可直接在面具中选择 [EdgeMask-QTI-Compat-1.0.1.zip](app/src/main/assets/EdgeMask-QTI-Compat-1.0.1.zip)，已经装了 APK 1.6 时无需先升级 APK 才能安装此 ZIP。若面具界面仍显示相同错误，使用 APK 1.6.1 的命令安装入口。安装失败无需为此重启；失败结果可以复制给开发者，应用不会自动发送。
+
+验证包含旧版管理器缺少入口的失败复现、官方安装引导及实际 `install_module()` 在临时文件系统中的安装，以及生产 Java/RootShell/命令脚本的成功、授权拒绝、非 Root、缺少面具命令、守护进程不可用、版本不明、不支持 CLI、安装器错误、未知库、虚假成功、错误版本、不完整文件、缺文件、路径引号/命令注入和重复安装检查。12 个原有模块场景与 18 个安装入口/CLI 场景通过；安装测试没有执行显示、属性修改或重启命令。显示修改、回退和开机属性脚本沿用 1.6；仍未连接真机验证面板或启动时序。
+
+上游来源及许可见模块的 [NOTICE](compat/qti-framebuffer/NOTICE)、[LICENSE-Magisk](compat/qti-framebuffer/LICENSE-Magisk) 和 [测试夹具说明](tests/fixtures/magisk/NOTICE)。官方 CLI 文档见 [Magisk Tools](https://topjohnwu.github.io/Magisk/tools.html#magisk)。
 
 ## 1.6：关闭 ROM 覆盖投影的帧缓冲缩放路径
 
@@ -14,7 +32,7 @@ Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可
 
 1. 在旧版点击“恢复原始显示并关闭遮罩”，等待恢复完成。
 2. 覆盖安装 [EdgeMask-1.6.apk](apk/EdgeMask-1.6.apk)，与旧版使用相同签名。
-3. 在 Magisk / KernelSU 管理器中从本地安装 [EdgeMask-QTI-Compat-1.0.zip](app/src/main/assets/EdgeMask-QTI-Compat-1.0.zip)。也可在 APK 内点击“修复分辨率修改后被拉伸（Root 模块）”保存同一 ZIP。安装完**手动重启一次**。
+3. 在 Magisk / KernelSU 管理器中从本地安装已修正入口的 [EdgeMask-QTI-Compat-1.0.1.zip](app/src/main/assets/EdgeMask-QTI-Compat-1.0.1.zip)。也可在 APK 1.6.1 内点击“修复分辨率修改后被拉伸（Root 模块）”保存同一 ZIP。安装完**手动重启一次**。
 4. 回到应用，检测 Root、打开 Root 同步，先设每侧 1% 并启用。直接检查手机的圆形、两侧边距与触摸，正常再确认；可用“查看模块状态”确认本次开机是否执行。若只启用遮罩，系统布局不会收窄。
 5. 撤回模块：先在应用恢复原始显示，再在 Root 管理器中停用/移除模块并重启。卸载 APK 不会移除模块。
 
@@ -83,7 +101,7 @@ Android 屏幕工具：左右对称黑条、可调宽度与内边框圆角；可
 
 ## 下载与使用
 
-先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.6.apk](apk/EdgeMask-1.6.apk)。与旧版使用相同签名。当前反馈 ROM 的拉伸修复需按 1.6 步骤安装兼容模块并重启；以下是遮罩和 Root 功能的操作方法。
+先在旧版点击“恢复原始显示并关闭遮罩”，再覆盖安装 [EdgeMask-1.6.1.apk](apk/EdgeMask-1.6.1.apk)。与旧版使用相同签名。当前反馈 ROM 的拉伸修复需按 1.6.1 步骤安装兼容模块并重启；以下是遮罩和 Root 功能的操作方法。
 
 1. 选择无障碍遮罩或普通悬浮窗，授予相应权限。
 2. 点击“检测并申请 Root 权限”，开启 Root 同步；保留“GPU 合成兼容模式”勾选。
@@ -163,6 +181,7 @@ python3 tests/compositor_guard_checks.py build/safety
 python3 tests/compositor_bridge_checks.py
 python3 compat/build_module.py
 python3 tests/framebuffer_module_checks.py
+python3 tests/magisk_install_checks.py
 # 只读 ROM 导出检查
 javac -d build/safety app/src/main/java/com/edges/mask/RootShell.java app/src/main/java/com/edges/mask/RomEvidence.java tests/RomEvidenceChecks.java
 java -cp build/safety com.edges.mask.RomEvidenceChecks
