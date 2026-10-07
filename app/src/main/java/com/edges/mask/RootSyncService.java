@@ -148,7 +148,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             if (!wanted() || request != generation) return;
             lastPercent = percent;
             projectionVerified = true; verifiedGeneration = request; verified = true;
-            RootController.message = "已提交合成层居中 " + target[0] + "×" + target[1]
+            RootController.message = "已提交显示适配 " + target[0] + "×" + target[1]
                 + (Config.gpuCompatibility(this)?" + GPU 合成":"") + "；请检查手机实际画面";
             ui.post(() -> { if (!stopping) Config.refresh(RootSyncService.this); });
         } catch (Exception e) {
@@ -164,7 +164,7 @@ public class RootSyncService extends Service implements DisplayManager.DisplayLi
             String state = RootController.read(RootController.file(this, "state"));
             if (!state.isEmpty()) { revert("回退已触发，请重新启用"); return; }
             RootController.lease(this, now + 20); pending = false;
-            RootController.message = "已保留合成层居中；持续监控输出投影与触摸映射";
+            RootController.message = "已保留显示适配；持续监控输出投影与输入报告";
             Config.refresh(this);
         } catch (Exception e) { revert("无法确认，触发恢复"); }
     }

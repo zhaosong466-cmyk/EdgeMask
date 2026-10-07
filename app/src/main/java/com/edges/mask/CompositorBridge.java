@@ -41,6 +41,7 @@ public final class CompositorBridge {
             throw new IOException("SurfaceFlinger 接口无法识别");
         // Resolve every mutation API before any display modification.
         transaction.getMethod("setDisplayProjection",IBinder.class,int.class,Rect.class,Rect.class);
+        transaction.getMethod("setDisplaySize",IBinder.class,int.class,int.class);
         transaction.getMethod("apply",boolean.class);
         transaction.getMethod("close");
     }
@@ -94,6 +95,14 @@ public final class CompositorBridge {
         } finally { transaction.getMethod("close").invoke(t); }
     }
     private static Rect rect(int[] r) { return new Rect(r[0],r[1],r[2],r[3]); }
+    private void resizeBuffer(long id,int w,int h) throws Exception {
+        if(w<200 || h<200 || w>10000 || h>10000) throw new IOException("备份的缓冲区尺寸无效");
+        Object t=transaction.getConstructor().newInstance();
+        try {
+            transaction.getMethod("setDisplaySize",IBinder.class,int.class,int.class).invoke(t,token(id),w,h);
+            transaction.getMethod("apply",boolean.class).invoke(t,true);
+        } finally { transaction.getMethod("close").invoke(t); }
+    }
     private int gpu() throws Exception {
         // AOSP Android 16 developer-option protocol: 1010 returns exactly five int32s.
         // Check the descriptor AND reply layout; never guess a vendor transaction or default state.
@@ -129,6 +138,7 @@ public final class CompositorBridge {
         p.setProperty("id",Long.toString(id)); p.setProperty("width",""+w); p.setProperty("height",""+h);
         p.setProperty("rotation",""+rotation); p.setProperty("gpu",forceGpu?""+gpu():"-1");
         p.setProperty("output",Arrays.toString(g.output)); p.setProperty("boot",boot());
+        p.setProperty("frameWidth",""+g.frameBounds[2]); p.setProperty("frameHeight",""+g.frameBounds[3]);
         writeProperties(p);
         note("before",g,forceGpu?gpu():-1);
         System.out.println("合成层原始状态已备份");
@@ -137,29 +147,61 @@ public final class CompositorBridge {
         Properties p=load(); long id=Long.parseLong(p.getProperty("id"));
         if(!boot().equals(p.getProperty("boot"))) throw new IOException("系统已重启，旧会话不能继续");
         int ow=number(p,"width"),oh=number(p,"height"),r=number(p,"rotation");
+        int savedGpu=number(p,"gpu");
+        CompositorGeometry before=geometry(id);
+        // Persist the actual post-WM geometry BEFORE any validation can throw. Earlier builds
+        // lost exactly the state needed to explain the user's output-aspect failure.
+        if(apply) note("after-wm "+w+"x"+h,before,savedGpu>=0?gpu():-1);
         DisplayProjection input=DisplayProjection.parse(run("/system/bin/dumpsys","input"));
         for(int i=0;apply && i<5 && input.rotation==r && !Arrays.equals(input.logical,CompositorGeometry.logical(w,h,r));i++) {
             Thread.sleep(100); input=DisplayProjection.parse(run("/system/bin/dumpsys","input"));
         }
         if(input.rotation!=r || !Arrays.equals(input.logical,CompositorGeometry.logical(w,h,r)))
             throw new IOException("输入坐标正在变化");
-        CompositorGeometry before=geometry(id);
-        if(before.rotation!=r) throw new IOException("屏幕方向已改变");
-        int[] dest=CompositorGeometry.centered(ow,oh,w,h,r,before.outputBounds[2],before.outputBounds[3]);
-        int[] source=CompositorGeometry.logical(w,h,r);
-        int savedGpu=number(p,"gpu");
         if(apply) {
-            note("requested-before",before,savedGpu>=0?gpu():-1);
+            // WM traversal and the compositor commit need not finish in the same instant.
+            Thread.sleep(80); before=geometry(id);
+            note("before-project",before,savedGpu>=0?gpu():-1);
+        }
+        if(before.rotation!=r) throw new IOException("屏幕方向已改变");
+        int[] originalOutput=CompositorGeometry.rect(p.getProperty("output"));
+        if(originalOutput[0]!=0 || originalOutput[1]!=0) throw new IOException("原始输出备份不是全屏");
+        CompositorPlan plan=new CompositorPlan(ow,oh,w,h,r,originalOutput[2],originalOutput[3],
+            before.outputBounds[2],before.outputBounds[3]);
+        if(apply && plan.compensated && p.containsKey("frameWidth") && p.containsKey("frameHeight")) {
+            int nw=r%2==0?originalOutput[2]:originalOutput[3],nh=r%2==0?originalOutput[3]:originalOutput[2];
+            // setDisplaySize affects the software output buffer, not a panel mode. Some ROMs
+            // ignore it for physical displays. Try only the saved size and verify the result;
+            // do not use a fabricated resolution or a private vendor transaction.
+            if(number(p,"frameWidth")==nw && number(p,"frameHeight")==nh) {
+                p.setProperty("outputSizeRequested","true"); writeProperties(p);
+                note("restore-buffer-request: "+nw+"x"+nh);
+                resizeBuffer(id,nw,nh); Thread.sleep(80);
+                before=geometry(id); note("after-buffer-request",before,savedGpu>=0?gpu():-1);
+                if(before.rotation!=r) throw new IOException("缓冲区更新时屏幕方向改变");
+                plan=new CompositorPlan(ow,oh,w,h,r,originalOutput[2],originalOutput[3],
+                    before.outputBounds[2],before.outputBounds[3]);
+            }
+        }
+        if(plan.compensated && savedGpu<0) throw new IOException("输出已随分辨率缩窄，请勾选 GPU 合成兼容模式后重新应用");
+        if(apply) {
+            note("mapping: "+plan.numericSummary());
             if(savedGpu>=0) gpu(1);
-            project(id,r,source,dest);
+            project(id,r,plan.source,plan.destination);
         }
         Exception last=null;
         for(int i=0;i<(apply?5:1);i++) {
             try {
-                CompositorGeometry after=geometry(id); after.require(source,dest,r);
+                CompositorGeometry after=geometry(id);
+                if(apply) note("after-project",after,savedGpu>=0?gpu():-1);
+                plan.require(after);
                 if(savedGpu>=0 && gpu()!=1) throw new IOException("GPU 合成被系统关闭");
                 if(apply) note("applied",after,savedGpu>=0?1:-1); return;
-            } catch(Exception e) { last=e; if(apply) Thread.sleep(100); }
+            } catch(Exception e) {
+                last=e;
+                if(!apply) note("monitor-failed",before,savedGpu>=0?gpu():-1);
+                if(apply) Thread.sleep(100);
+            }
         }
         throw last;
     }
@@ -172,6 +214,11 @@ public final class CompositorBridge {
         Exception error=null;
         int oldGpu=number(p,"gpu");
         try { if(oldGpu>=0) gpu(oldGpu); } catch(Exception e) { error=e; }
+        // A buffer restore failure must not skip the independent projection restore.
+        if("true".equals(p.getProperty("outputSizeRequested"))) {
+            try { resizeBuffer(Long.parseLong(p.getProperty("id")),number(p,"frameWidth"),number(p,"frameHeight")); }
+            catch(Exception e) { if(error==null) error=e; }
+        }
         try {
             int w=number(p,"width"),h=number(p,"height"); long id=Long.parseLong(p.getProperty("id"));
             DisplayProjection input=DisplayProjection.parse(run("/system/bin/dumpsys","input"));
@@ -199,13 +246,17 @@ public final class CompositorBridge {
         File tmp=new File(dir,"compositor.tmp");
         try(FileOutputStream out=new FileOutputStream(tmp)) { p.store(out,"Original compositor state"); out.getFD().sync(); }
         if(!tmp.setReadable(true,false)) throw new IOException("无法设置恢复记录读取权限");
-        Files.move(tmp.toPath(),new File(dir,"compositor.properties").toPath(),StandardCopyOption.ATOMIC_MOVE);
+        Files.move(tmp.toPath(),new File(dir,"compositor.properties").toPath(),StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING);
     }
     private void note(String stage,CompositorGeometry g,int gpu) throws IOException {
+        note(stage+": "+g.numericSummary()+"; GPU="+gpu);
+    }
+    private void note(String text) throws IOException {
         // Numeric evidence survives timeout recovery. App-private file; never uploaded automatically.
         File report=new File(dir,"compositor-report.txt");
         try(FileOutputStream out=new FileOutputStream(report,report.length()<32768)) {
-            out.write((stage+": "+g.numericSummary()+"; GPU="+gpu+"\n").getBytes(StandardCharsets.UTF_8));
+            out.write((text+"\n").getBytes(StandardCharsets.UTF_8));
         }
     }
     private static String run(String... command) throws Exception {

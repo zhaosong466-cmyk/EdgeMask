@@ -6,9 +6,9 @@ import java.util.regex.*;
 /** SurfaceFlinger output geometry, separate from the input service's cached viewport. */
 final class CompositorGeometry {
     final int rotation;
-    final int[] layer, frameBounds, frame, outputBounds, output;
-    CompositorGeometry(int r, int[] l, int[] fb, int[] f, int[] ob, int[] o) {
-        rotation=r; layer=l; frameBounds=fb; frame=f; outputBounds=ob; output=o;
+    final int[] layer, frameBounds, frame, outputBounds, output, nativeBounds, nativeOutput;
+    CompositorGeometry(int r, int[] l, int[] fb, int[] f, int[] ob, int[] o, int[] nb, int[] no) {
+        rotation=r; layer=l; frameBounds=fb; frame=f; outputBounds=ob; output=o; nativeBounds=nb; nativeOutput=no;
     }
     static int[] rect(String value) {
         Matcher m=Pattern.compile("-?\\d+").matcher(value); int[] v=new int[4]; int n=0;
@@ -35,7 +35,7 @@ final class CompositorGeometry {
         int[][] oriented=space(fields.get("orientedDisplaySpace")), display=space(fields.get("displaySpace"));
         if(oriented[2][0]!=0 || layer[2][0]!=0 || frame[2][0]!=display[2][0])
             throw new IllegalArgumentException("合成层坐标方向不一致");
-        return new CompositorGeometry(display[2][0],layer[1],frame[0],frame[1],oriented[0],oriented[1]);
+        return new CompositorGeometry(display[2][0],layer[1],frame[0],frame[1],oriented[0],oriented[1],display[0],display[1]);
     }
     private static int[][] space(String s) {
         if(s==null) throw new IllegalArgumentException("ROM 未提供合成层坐标，请复制显示诊断");
@@ -71,6 +71,7 @@ final class CompositorGeometry {
     String numericSummary() {
         return "rotation="+rotation+"; logical="+Arrays.toString(layer)+"; output="+Arrays.toString(output)
             +"; outputBounds="+Arrays.toString(outputBounds)+"; framebuffer="+Arrays.toString(frame)
-            +"; framebufferBounds="+Arrays.toString(frameBounds);
+            +"; framebufferBounds="+Arrays.toString(frameBounds)+"; nativeBounds="+Arrays.toString(nativeBounds)
+            +"; nativeOutput="+Arrays.toString(nativeOutput);
     }
 }

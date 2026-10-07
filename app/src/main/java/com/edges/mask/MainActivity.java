@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.4.1", 24);
+        text(header, "对称黑边 1.5", 24);
         status = text(header, "", 12); status.setMaxLines(2);
         rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);
@@ -116,7 +116,7 @@ public class MainActivity extends Activity {
         gpuMode=new CheckBox(this); gpuMode.setText("GPU 合成兼容模式（处理修改分辨率后的拉伸）");
         gpuMode.setChecked(Config.gpuCompatibility(this)); root.addView(gpuMode);
         gpuMode.setOnCheckedChangeListener((v,on) -> Config.prefs(this).edit().putBoolean("gpuCompatibility",on).apply());
-        text("Root 会收窄系统布局，并明确设置屏幕合成层的居中区域。GPU 兼容模式用于绕过硬件合成的拉伸路径，可能增加耗电、影响视频播放；退出时恢复原设置。没有机型禁用名单。每次改动需在倒计时内直接检查手机上的圆形及触摸；不确认会自动恢复。", 13);
+        text("Root 会收窄系统布局，优先保持原始输出尺寸；若系统同步收窄输出，则通过 GPU 反向补偿拉伸。此模式可能增加耗电、影响视频播放，退出时恢复原设置。每次改动需在倒计时内直接检查手机上的圆形、黑边及触摸；不确认会自动恢复。", 13);
         button("复制显示诊断（只读，需要 Root）", this::copyDisplayDiagnostics);
         width = slider("每侧黑条宽度", 25, "%", "width", 4);
         radius = slider("内边框圆角半径", 160, "dp", "radius", 32);
