@@ -20,7 +20,7 @@ final class CompositorGeometry {
     static CompositorGeometry parse(String dump, String id) {
         boolean selected=false; int count=0; Map<String,String> fields=new HashMap<>();
         Pattern header=Pattern.compile("^Display ([0-9]+) \\(physical,.*$");
-        Pattern field=Pattern.compile("^\\s*(layerStackSpace|framebufferSpace|orientedDisplaySpace|displaySpace)=(.*)$");
+        Pattern field=Pattern.compile("^\\s*(layerStackSpace|framebufferSpace|orientedDisplaySpace|displaySpace)\\s*=\\s*(.*)$");
         for(String line:dump.split("\\r?\\n")) {
             if(line.startsWith("Display ")) {
                 Matcher h=header.matcher(line); selected=h.matches() && h.group(1).equals(id);
@@ -39,8 +39,10 @@ final class CompositorGeometry {
     }
     private static int[][] space(String s) {
         if(s==null) throw new IllegalArgumentException("ROM 未提供合成层坐标，请复制显示诊断");
-        Matcher m=Pattern.compile("ProjectionSpace\\{bounds=(.*?),\\s*content=(.*?),\\s*orientation=(?:ROTATION_|ROT_)?(0|90|180|270)\\}").matcher(s);
-        if(!m.matches()) throw new IllegalArgumentException("ROM 合成层坐标格式不同，请复制显示诊断");
+        // dumpsys may append spaces after '}'. They are formatting, not a different ROM
+        // protocol. Normalize only whitespace; still require every field and valid value.
+        Matcher m=Pattern.compile("ProjectionSpace\\s*\\{\\s*bounds\\s*=\\s*(.*?),\\s*content\\s*=\\s*(.*?),\\s*orientation\\s*=\\s*(?:ROTATION_|ROT_)?(0|90|180|270)\\s*\\}").matcher(s.trim());
+        if(!m.matches()) throw new IllegalArgumentException("无法解析合成层坐标，请复制显示诊断");
         return new int[][]{rect(m.group(1)),rect(m.group(2)),new int[]{Integer.parseInt(m.group(3))/90}};
     }
     static int[] logical(int w,int h,int r) { return r%2==0?new int[]{0,0,w,h}:new int[]{0,0,h,w}; }

@@ -55,6 +55,35 @@ public final class CompositorChecks {
             new int[]{0,0,3200,1440},nativeSize,new int[]{0,96,1440,3104});
         CompositorGeometry.parse(landscape,"42").require(new int[]{0,0,3008,1440},new int[]{96,0,3104,1440},1);
         check(true,"handle rotated full framebuffer separately from oriented content");
+        // Coordinate rows supplied by the Xiaomi / Android 16 diagnostic. The display ID
+        // and header below are synthetic; no device identifiers or build fingerprint are stored.
+        // Preserve the real trailing spaces: stripping them from a fixture hides the 1.4 bug.
+        String reported="Display 42 (physical, \"Built-in Screen\")\n"
+            +"   layerStackSpace=ProjectionSpace{bounds=Rect(0, 0, 1440, 3200), content=Rect(0, 0, 1440, 3200), orientation=ROTATION_0} \n"
+            +"   framebufferSpace=ProjectionSpace{bounds=Rect(0, 0, 1440, 3200), content=Rect(0, 0, 1440, 3200), orientation=ROTATION_0} \n"
+            +"   orientedDisplaySpace=ProjectionSpace{bounds=Rect(0, 0, 1440, 3200), content=Rect(0, 0, 1440, 3200), orientation=ROTATION_0} \n"
+            +"   displaySpace=ProjectionSpace{bounds=Rect(0, 0, 1440, 3200), content=Rect(0, 0, 1440, 3200), orientation=ROTATION_0} \n";
+        CompositorGeometry.parse(reported,"42").require(nativeSize,nativeSize,0);
+        check(true,"accept actual comma-separated Rect values with trailing spaces");
+        String whitespace=reported.replace("="," \t=\t ").replace("{","{\t ").replace("}"," \t}")
+            .replace("\n","\t \r\n");
+        CompositorGeometry.parse(whitespace,"42").require(nativeSize,nativeSize,0);
+        check(true,"tolerate field whitespace, tabs and CRLF without changing coordinates");
+        String narrowReported=reported.replace("layerStackSpace=ProjectionSpace{bounds=Rect(0, 0, 1440, 3200), content=Rect(0, 0, 1440, 3200)",
+            "layerStackSpace=ProjectionSpace{bounds=Rect(0, 0, 1354, 3200), content=Rect(0, 0, 1354, 3200)");
+        rejects(()->CompositorGeometry.parse(narrowReported,"42").require(narrow,centered,0),
+            "whitespace tolerance must not accept actual full-screen stretching");
+        String centeredReported=narrowReported.replace("content=Rect(0, 0, 1440, 3200)","content=Rect(43, 0, 1397, 3200)");
+        CompositorGeometry.parse(centeredReported,"42").require(narrow,centered,0);
+        check(true,"accept centered post-apply readback in the same reported format");
+        rejects(()->CompositorGeometry.parse(reported.replace("ROTATION_0","ROTATION_45"),"42"),
+            "continue rejecting unsupported orientation values");
+        rejects(()->CompositorGeometry.parse(reported.replace("} ","} unexpected "),"42"),
+            "only trailing whitespace may be ignored, not unknown content");
+        rejects(()->CompositorGeometry.parse(whitespace+whitespace,"42"),
+            "whitespace must not hide ambiguous display records");
+        rejects(()->CompositorGeometry.parse(reported.replace("1440, 3200","-1440, 3200"),"42"),
+            "continue rejecting invalid rectangles in reported format");
         System.out.println("PASS: "+checks+" compositor geometry regression checks");
     }
 }

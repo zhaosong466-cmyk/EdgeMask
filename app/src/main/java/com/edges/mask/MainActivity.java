@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         screen = new LinearLayout(this); screen.setOrientation(1);
         screen.setBackgroundColor(Color.rgb(240, 244, 250));
         header = new LinearLayout(this); header.setOrientation(1); screen.addView(header);
-        text(header, "对称黑边 1.4", 24);
+        text(header, "对称黑边 1.4.1", 24);
         status = text(header, "", 12); status.setMaxLines(2);
         rootStatus = text(header, "", 13); rootStatus.setMaxLines(3);
         ScrollView scroll = new ScrollView(this); root = new LinearLayout(this); root.setOrientation(1);

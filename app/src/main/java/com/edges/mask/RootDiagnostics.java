@@ -7,7 +7,7 @@ import java.util.Arrays;
 /** Explicit, read-only collection. No mutation, screenshot, network, or automatic upload. */
 final class RootDiagnostics {
     static String collect(Context c) {
-        StringBuilder report = new StringBuilder("EdgeMask 1.4 显示诊断（只读）\n");
+        StringBuilder report = new StringBuilder("EdgeMask 1.4.1 显示诊断（只读）\n");
         report.append("制造商: ").append(Build.MANUFACTURER)
             .append("\n机型: ").append(Build.MODEL).append("\n设备代号: ").append(Build.DEVICE)
             .append("\nAndroid: ").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT)
